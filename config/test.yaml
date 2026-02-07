@@ -1,0 +1,6 @@
+
+
+llm:
+  model: accounts/fireworks/models/qwen3-vl-235b-a22b-instruct
+  temperature: 0.7
+
