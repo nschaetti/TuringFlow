@@ -24,6 +24,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         Commands::Embeddings { text_path, model } => {
             commands::embeddings::run_embeddings(text_path, model)?;
         }
+        Commands::Calc {
+            prompt,
+            model,
+            temperature,
+        } => {
+            commands::calc::run_calc(prompt, model, temperature)?;
+        }
     }
 
     Ok(())
