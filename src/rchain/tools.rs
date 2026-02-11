@@ -86,7 +86,10 @@ impl ToolFunction {
                 Value::String(param.kind.as_str().to_string()),
             );
             if let Some(description) = &param.description {
-                param_def.insert("description".to_string(), Value::String(description.clone()));
+                param_def.insert(
+                    "description".to_string(),
+                    Value::String(description.clone()),
+                );
             }
             properties.insert(param.name.clone(), Value::Object(param_def));
             if param.required {

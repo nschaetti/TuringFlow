@@ -41,8 +41,8 @@ pub fn run_image(
     ]);
 
     let response = llm.invoke(&[message])?;
-    let parsed: serde_json::Value = serde_json::from_str(&response.content)
-        .map_err(|_| "LLM response is not valid JSON")?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(&response.content).map_err(|_| "LLM response is not valid JSON")?;
     let pretty = serde_json::to_string_pretty(&parsed)?;
     println!("{}", pretty);
 

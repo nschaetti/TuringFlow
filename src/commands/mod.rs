@@ -1,3 +1,3 @@
-pub mod image;
-pub mod embeddings;
 pub mod calc;
+pub mod embeddings;
+pub mod image;

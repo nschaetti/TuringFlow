@@ -161,12 +161,14 @@ impl ChatMessage {
         let mut map = Map::new();
         map.insert(
             "role".to_string(),
-            Value::String(match self.role {
-                MessageRole::User => "user",
-                MessageRole::Assistant => "assistant",
-                MessageRole::Tool => "tool",
-            }
-            .to_string()),
+            Value::String(
+                match self.role {
+                    MessageRole::User => "user",
+                    MessageRole::Assistant => "assistant",
+                    MessageRole::Tool => "tool",
+                }
+                .to_string(),
+            ),
         );
         map.insert("content".to_string(), self.content.clone());
         if let Some(tool_call_id) = &self.tool_call_id {
@@ -193,7 +195,9 @@ fn parse_tool_calls(message: &Value) -> Vec<ToolCall> {
             let name = call["function"]["name"].as_str().unwrap_or("").to_string();
             let arguments = &call["function"]["arguments"];
             let args = match arguments {
-                Value::String(raw) => serde_json::from_str(raw).unwrap_or(Value::String(raw.clone())),
+                Value::String(raw) => {
+                    serde_json::from_str(raw).unwrap_or(Value::String(raw.clone()))
+                }
                 other => other.clone(),
             };
             if !name.is_empty() {
