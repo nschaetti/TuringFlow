@@ -16,3 +16,10 @@ tokio = { version = "1.44", features = ["macros", "rt-multi-thread"] }
 rustls = "0.23"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 time = { version = "0.3", features = ["formatting", "parsing"] }
+tokio-rustls = "0.26"
+rustls-pemfile = "2.2"
+hyper = { version = "1.7", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["server", "http1", "http2", "tokio", "service"] }
+x509-parser = "0.16"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "json"] }
