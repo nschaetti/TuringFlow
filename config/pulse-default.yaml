@@ -1,0 +1,8 @@
+colors:
+  foreground: white
+  background: black
+  primary: cyan
+
+widgets:
+  textbox_prefix: "[ "
+  textbox_suffix: " ]"
