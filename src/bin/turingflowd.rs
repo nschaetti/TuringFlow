@@ -20,21 +20,38 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
 use tokio_rustls::TlsAcceptor;
+use tracing::{info, warn};
+use turingflow::kernel::context::ExecutionContext;
+use turingflow::kernel::errors::{KernelError, KernelErrorCode};
+use turingflow::kernel::policy::{PolicyConfig, PolicyEngine};
+use turingflow::kernel::syscalls::fs::{FsListReq, FsReadReq, FsWriteReq, HostFsProvider};
+use turingflow::kernel::syscalls::net::NetHttpReq;
+use turingflow::kernel::syscalls::process::ProcExecReq;
+use turingflow::kernel::Kernel;
 use turingflow::tfpv1::agent_ref::AgentRef;
-use turingflow::tfpv1::dedupe::{within_replay_window, DedupeCache, DedupeResult};
 use turingflow::tfpv1::errors;
 use turingflow::tfpv1::mtls::{build_server_config, extract_node_id_from_cert};
-use turingflow::tfpv1::registry::{Registry, RegistryError};
-use turingflow::tfpv1::router::{ClientTlsConfig, DestinationRoute, Router as TfpRouter, RouterError};
-use turingflow::tfpv1::types::{AckRequest, HeartbeatRequest, RegisterRequest, SendRequest};
-use tracing::{info, warn};
+use turingflow::tfpv1::router::{
+    ClientTlsConfig, DestinationRoute, Router as TfpRouter, RouterError, RouterRetryPolicy,
+};
+use turingflow::tfpv1::storage::sqlite::initialize_database;
+use turingflow::tfpv1::storage::sqlite_ack::SqliteAckStore;
+use turingflow::tfpv1::storage::sqlite_dedupe::{within_replay_window, DedupeResult, SqliteDedupe};
+use turingflow::tfpv1::storage::sqlite_registry::{RegistryError, SqliteRegistry};
+use turingflow::tfpv1::system_config::{DaemonConfig, KingdomQuotas, KingdomsConfig};
+use turingflow::tfpv1::types::{
+    AckRequest, HeartbeatRequest, Meta, RegisterRequest, SendRequest, SendResponse, TFPV1_VERSION,
+};
 
 #[derive(Clone)]
 struct AppState {
-    registry: Arc<RwLock<Registry>>,
+    registry: Arc<RwLock<SqliteRegistry>>,
     router: Arc<RwLock<TfpRouter>>,
-    dedupe: Arc<RwLock<DedupeCache>>,
+    dedupe: Arc<RwLock<SqliteDedupe>>,
     replay_window_seconds: i64,
+    max_payload_bytes: usize,
+    max_message_ttl_ms: u64,
+    kingdoms: Arc<KingdomsConfig>,
     metrics: Arc<Metrics>,
 }
 
@@ -78,63 +95,61 @@ struct ResolveQuery {
 #[derive(Debug, Parser)]
 #[command(name = "turingflowd", version, about = "TuringFlow daemon")]
 struct Args {
-    #[arg(long = "listen", default_value = "0.0.0.0:8443")]
-    listen: String,
-    #[arg(long = "tls-cert")]
-    tls_cert: PathBuf,
-    #[arg(long = "tls-key")]
-    tls_key: PathBuf,
-    #[arg(long = "client-ca-cert")]
-    client_ca_cert: PathBuf,
-    #[arg(long = "node-id", default_value = "turingflowd")]
-    node_id: String,
-    #[arg(long = "upstream-ca-cert")]
-    upstream_ca_cert: Option<PathBuf>,
-    #[arg(long = "upstream-client-cert")]
-    upstream_client_cert: Option<PathBuf>,
-    #[arg(long = "upstream-client-key")]
-    upstream_client_key: Option<PathBuf>,
-    #[arg(long = "replay-window-seconds", default_value_t = 60)]
-    replay_window_seconds: i64,
+    #[arg(long = "config", default_value = "config/turingflowd.yaml")]
+    config: PathBuf,
+    #[arg(long = "kingdoms-config", default_value = "config/kingdoms.yaml")]
+    kingdoms_config: PathBuf,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    tracing_subscriber::fmt().json().with_current_span(false).init();
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
     let args = Args::parse();
-    let addr: SocketAddr = args.listen.parse()?;
+    let daemon_config = DaemonConfig::from_file(&args.config)?;
+    let kingdoms_config = KingdomsConfig::from_file(&args.kingdoms_config)?;
+
+    let sqlite_path = daemon_config.storage.sqlite.path.clone();
+    initialize_database(&sqlite_path)?;
+
+    let max_level = daemon_config.logging.level();
+    let log_builder = tracing_subscriber::fmt().with_max_level(max_level);
+    if daemon_config.logging.format == "json" {
+        log_builder.json().init();
+    } else {
+        log_builder.init();
+    }
+
+    let addr: SocketAddr = daemon_config.listen_addr()?;
 
     let tls_config = build_server_config(
-        &args.tls_cert.to_string_lossy(),
-        &args.tls_key.to_string_lossy(),
-        &args.client_ca_cert.to_string_lossy(),
+        &daemon_config.tls.server_cert,
+        &daemon_config.tls.server_key,
+        &daemon_config.tls.client_ca_cert,
     )?;
     let tls_acceptor = TlsAcceptor::from(tls_config);
 
-    let router = TfpRouter::new(
-        args.node_id.clone(),
+    let router = TfpRouter::new_with_policy_and_ack_store(
+        daemon_config.server.node_id.clone(),
         ClientTlsConfig {
-            ca_cert_path: args
-                .upstream_ca_cert
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string()),
-            client_cert_path: args
-                .upstream_client_cert
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string()),
-            client_key_path: args
-                .upstream_client_key
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string()),
+            ca_cert_path: daemon_config.tls.upstream_ca_cert.clone(),
+            client_cert_path: daemon_config.tls.upstream_client_cert.clone(),
+            client_key_path: daemon_config.tls.upstream_client_key.clone(),
         },
+        RouterRetryPolicy {
+            retry_delays_ms: daemon_config.routing.retry_delays_ms.clone(),
+        },
+        SqliteAckStore::new(sqlite_path.clone()),
     )?;
 
     let state = AppState {
-        registry: Arc::new(RwLock::new(Registry::new())),
+        registry: Arc::new(RwLock::new(SqliteRegistry::new(sqlite_path.clone()))),
         router: Arc::new(RwLock::new(router)),
-        dedupe: Arc::new(RwLock::new(DedupeCache::new())),
-        replay_window_seconds: args.replay_window_seconds,
+        dedupe: Arc::new(RwLock::new(SqliteDedupe::new(sqlite_path))),
+        replay_window_seconds: daemon_config.security.replay_window_seconds,
+        max_payload_bytes: daemon_config.limits.max_payload_bytes,
+        max_message_ttl_ms: daemon_config.limits.max_message_ttl_ms,
+        kingdoms: Arc::new(kingdoms_config),
         metrics: Arc::new(Metrics::default()),
     };
 
@@ -143,10 +158,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         loop {
             sleep(Duration::from_secs(5)).await;
             let mut registry = gc_state.registry.write().await;
-            registry.cleanup_expired_now();
+            if let Err(error) = registry.cleanup_expired_now() {
+                warn!(error = ?error, "registry_cleanup_failed");
+            }
             drop(registry);
             let mut dedupe = gc_state.dedupe.write().await;
-            dedupe.cleanup_expired_now();
+            if let Err(error) = dedupe.cleanup_expired_now() {
+                warn!(error = ?error, "dedupe_cleanup_failed");
+            }
         }
     });
 
@@ -236,16 +255,68 @@ async fn register_agent(
         return invalid_payload(error.to_string());
     }
 
+    let quotas = match kingdom_quotas(&state, &request.kingdom_id) {
+        Ok(quotas) => quotas,
+        Err(error) => return error,
+    };
+
+    if request.agents.len() > quotas.max_agents_per_node {
+        return invalid_payload(format!(
+            "agents count exceeds max_agents_per_node ({})",
+            quotas.max_agents_per_node
+        ));
+    }
+    if request.lease_ttl_ms > quotas.max_lease_ttl_ms {
+        return invalid_payload(format!(
+            "lease_ttl_ms exceeds max_lease_ttl_ms ({})",
+            quotas.max_lease_ttl_ms
+        ));
+    }
+
     if request.node.node_id.to_ascii_lowercase() != identity.node_id {
         return identity_mismatch();
     }
 
     let mut registry = state.registry.write().await;
+    let existing_count =
+        match registry.count_agents_for_node(&request.kingdom_id, &request.node.node_id) {
+            Ok(count) => count,
+            Err(RegistryError::Storage(message)) => return internal_error(message),
+            Err(RegistryError::Invalid(message)) => return invalid_payload(message.to_string()),
+            Err(RegistryError::IdentityMismatch) => return identity_mismatch(),
+            Err(RegistryError::LeaseExpired) => return lease_expired(),
+        };
+
+    let requested_agent_refs = request
+        .agents
+        .iter()
+        .map(|agent| agent.agent_ref.clone())
+        .collect::<Vec<_>>();
+    let additional_agents = match registry.additional_agents_for_node_registration(
+        &request.kingdom_id,
+        &request.node.node_id,
+        &requested_agent_refs,
+    ) {
+        Ok(count) => count,
+        Err(RegistryError::Storage(message)) => return internal_error(message),
+        Err(RegistryError::Invalid(message)) => return invalid_payload(message.to_string()),
+        Err(RegistryError::IdentityMismatch) => return identity_mismatch(),
+        Err(RegistryError::LeaseExpired) => return lease_expired(),
+    };
+
+    if existing_count.saturating_add(additional_agents) > quotas.max_agents_per_node {
+        return invalid_payload(format!(
+            "register would exceed max_agents_per_node ({})",
+            quotas.max_agents_per_node
+        ));
+    }
+
     match registry.register(request) {
         Ok(response) => ok_json(StatusCode::OK, response),
         Err(RegistryError::Invalid(message)) => invalid_payload(message.to_string()),
         Err(RegistryError::IdentityMismatch) => identity_mismatch(),
         Err(RegistryError::LeaseExpired) => lease_expired(),
+        Err(RegistryError::Storage(message)) => internal_error(message),
     }
 }
 
@@ -268,6 +339,10 @@ async fn heartbeat_agent(
         return invalid_payload(error.to_string());
     }
 
+    if !state.kingdoms.is_allowed(&request.kingdom_id) {
+        return kingdom_not_allowed();
+    }
+
     if request.node_id.to_ascii_lowercase() != identity.node_id {
         return identity_mismatch();
     }
@@ -278,6 +353,7 @@ async fn heartbeat_agent(
         Err(RegistryError::Invalid(message)) => invalid_payload(message.to_string()),
         Err(RegistryError::IdentityMismatch) => identity_mismatch(),
         Err(RegistryError::LeaseExpired) => lease_expired(),
+        Err(RegistryError::Storage(message)) => internal_error(message),
     }
 }
 
@@ -296,9 +372,18 @@ async fn resolve_agent(
         Err(error) => return invalid_payload(format!("invalid agent_ref: {error}")),
     };
 
+    if !state.kingdoms.is_allowed(&query.kingdom_id) {
+        return kingdom_not_allowed();
+    }
+
     let mut registry = state.registry.write().await;
-    let response = registry.resolve(&query.kingdom_id, &parsed.normalized());
-    ok_json(StatusCode::OK, response)
+    match registry.resolve(&query.kingdom_id, &parsed.normalized()) {
+        Ok(response) => ok_json(StatusCode::OK, response),
+        Err(RegistryError::Storage(message)) => internal_error(message),
+        Err(RegistryError::Invalid(message)) => invalid_payload(message.to_string()),
+        Err(RegistryError::IdentityMismatch) => identity_mismatch(),
+        Err(RegistryError::LeaseExpired) => lease_expired(),
+    }
 }
 
 async fn send_message(
@@ -311,14 +396,58 @@ async fn send_message(
         Err(error) => return error,
     };
 
+    let payload_bytes = payload_size_bytes(&payload);
+
+    if payload_bytes > state.max_payload_bytes {
+        state
+            .metrics
+            .messages_failed
+            .fetch_add(1, Ordering::Relaxed);
+        return payload_too_large(state.max_payload_bytes);
+    }
+
     let request: SendRequest = match serde_json::from_value(payload) {
         Ok(request) => request,
         Err(error) => return invalid_payload(format!("invalid send request JSON: {error}")),
     };
 
+    let quotas = match kingdom_quotas(&state, &request.kingdom_id) {
+        Ok(quotas) => quotas,
+        Err(error) => {
+            state
+                .metrics
+                .messages_failed
+                .fetch_add(1, Ordering::Relaxed);
+            return error;
+        }
+    };
+
+    let max_payload_bytes = state.max_payload_bytes.min(quotas.max_payload_bytes);
+    if payload_bytes > max_payload_bytes {
+        state
+            .metrics
+            .messages_failed
+            .fetch_add(1, Ordering::Relaxed);
+        return payload_too_large(max_payload_bytes);
+    }
+
     if let Err(error) = request.validate() {
-        state.metrics.messages_failed.fetch_add(1, Ordering::Relaxed);
+        state
+            .metrics
+            .messages_failed
+            .fetch_add(1, Ordering::Relaxed);
         return invalid_payload(error.to_string());
+    }
+
+    let max_message_ttl_ms = state.max_message_ttl_ms.min(quotas.max_message_ttl_ms);
+    if request.message.ttl_ms > max_message_ttl_ms {
+        state
+            .metrics
+            .messages_failed
+            .fetch_add(1, Ordering::Relaxed);
+        return invalid_payload(format!(
+            "message.ttl_ms exceeds configured limit ({max_message_ttl_ms})"
+        ));
     }
 
     state.metrics.messages_in.fetch_add(1, Ordering::Relaxed);
@@ -327,7 +456,10 @@ async fn send_message(
     let message_timestamp = match OffsetDateTime::parse(&request.message.timestamp, &Rfc3339) {
         Ok(ts) => ts,
         Err(_) => {
-            state.metrics.messages_failed.fetch_add(1, Ordering::Relaxed);
+            state
+                .metrics
+                .messages_failed
+                .fetch_add(1, Ordering::Relaxed);
             return invalid_payload("message.timestamp must be RFC3339".to_string());
         }
     };
@@ -346,7 +478,10 @@ async fn send_message(
     );
 
     if !within_replay_window(message_timestamp, now, state.replay_window_seconds) {
-        state.metrics.messages_failed.fetch_add(1, Ordering::Relaxed);
+        state
+            .metrics
+            .messages_failed
+            .fetch_add(1, Ordering::Relaxed);
         warn!(
             message_id = %message_id,
             trace_id = %trace_id,
@@ -361,25 +496,41 @@ async fn send_message(
     let dedupe_ttl_ms = ttl_ms.max((state.replay_window_seconds.max(1) as u64) * 1000);
     let dedupe_expiry = now + TimeDuration::milliseconds(dedupe_ttl_ms.min(i64::MAX as u64) as i64);
     let mut dedupe = state.dedupe.write().await;
-    if dedupe.check_and_insert(&message_id, dedupe_expiry) == DedupeResult::Duplicate {
-        state.metrics.dedupe_hits.fetch_add(1, Ordering::Relaxed);
-        state.metrics.messages_failed.fetch_add(1, Ordering::Relaxed);
-        warn!(
-            message_id = %message_id,
-            trace_id = %trace_id,
-            from_ref = %from_ref,
-            to_ref = %to_ref,
-            "message_duplicate_rejected"
-        );
-        return duplicate_message();
+    match dedupe.check_and_insert(&message_id, dedupe_expiry) {
+        Ok(DedupeResult::Duplicate) => {
+            state.metrics.dedupe_hits.fetch_add(1, Ordering::Relaxed);
+            state
+                .metrics
+                .messages_failed
+                .fetch_add(1, Ordering::Relaxed);
+            warn!(
+                message_id = %message_id,
+                trace_id = %trace_id,
+                from_ref = %from_ref,
+                to_ref = %to_ref,
+                "message_duplicate_rejected"
+            );
+            return duplicate_message();
+        }
+        Ok(DedupeResult::Inserted) => {}
+        Err(error) => {
+            state
+                .metrics
+                .messages_failed
+                .fetch_add(1, Ordering::Relaxed);
+            return internal_error(error.to_string());
+        }
     }
     drop(dedupe);
 
     let mut registry = state.registry.write().await;
     let source = match registry.lookup_agent(&request.kingdom_id, &from_ref) {
-        Some(source) => source,
-        None => {
-            state.metrics.messages_failed.fetch_add(1, Ordering::Relaxed);
+        Ok(Some(source)) => source,
+        Ok(None) => {
+            state
+                .metrics
+                .messages_failed
+                .fetch_add(1, Ordering::Relaxed);
             warn!(
                 message_id = %message_id,
                 trace_id = %trace_id,
@@ -389,10 +540,41 @@ async fn send_message(
             );
             return identity_mismatch();
         }
+        Err(RegistryError::Storage(message)) => {
+            state
+                .metrics
+                .messages_failed
+                .fetch_add(1, Ordering::Relaxed);
+            return internal_error(message);
+        }
+        Err(RegistryError::Invalid(message)) => {
+            state
+                .metrics
+                .messages_failed
+                .fetch_add(1, Ordering::Relaxed);
+            return invalid_payload(message.to_string());
+        }
+        Err(RegistryError::IdentityMismatch) => {
+            state
+                .metrics
+                .messages_failed
+                .fetch_add(1, Ordering::Relaxed);
+            return identity_mismatch();
+        }
+        Err(RegistryError::LeaseExpired) => {
+            state
+                .metrics
+                .messages_failed
+                .fetch_add(1, Ordering::Relaxed);
+            return lease_expired();
+        }
     };
 
     if source.node_id.to_ascii_lowercase() != identity.node_id {
-        state.metrics.messages_failed.fetch_add(1, Ordering::Relaxed);
+        state
+            .metrics
+            .messages_failed
+            .fetch_add(1, Ordering::Relaxed);
         warn!(
             message_id = %message_id,
             trace_id = %trace_id,
@@ -404,9 +586,12 @@ async fn send_message(
     }
 
     let destination = match registry.lookup_agent(&request.kingdom_id, &to_ref) {
-        Some(destination) => destination,
-        None => {
-            state.metrics.messages_failed.fetch_add(1, Ordering::Relaxed);
+        Ok(Some(destination)) => destination,
+        Ok(None) => {
+            state
+                .metrics
+                .messages_failed
+                .fetch_add(1, Ordering::Relaxed);
             warn!(
                 message_id = %message_id,
                 trace_id = %trace_id,
@@ -416,8 +601,70 @@ async fn send_message(
             );
             return agent_not_found();
         }
+        Err(RegistryError::Storage(message)) => {
+            state
+                .metrics
+                .messages_failed
+                .fetch_add(1, Ordering::Relaxed);
+            return internal_error(message);
+        }
+        Err(RegistryError::Invalid(message)) => {
+            state
+                .metrics
+                .messages_failed
+                .fetch_add(1, Ordering::Relaxed);
+            return invalid_payload(message.to_string());
+        }
+        Err(RegistryError::IdentityMismatch) => {
+            state
+                .metrics
+                .messages_failed
+                .fetch_add(1, Ordering::Relaxed);
+            return identity_mismatch();
+        }
+        Err(RegistryError::LeaseExpired) => {
+            state
+                .metrics
+                .messages_failed
+                .fetch_add(1, Ordering::Relaxed);
+            return lease_expired();
+        }
     };
+    let destination_is_local = destination.node_id.eq_ignore_ascii_case(&source.node_id);
     drop(registry);
+
+    let execution_ctx = build_send_execution_context(&request);
+    if destination_is_local {
+        match try_execute_local_agent_operation(&execution_ctx, &request.message, &to_ref) {
+            Ok(Some(response)) => {
+                info!(
+                    message_id = %message_id,
+                    trace_id = %trace_id,
+                    from_ref = %from_ref,
+                    to_ref = %to_ref,
+                    tool_id = ?execution_ctx.tool_id,
+                    "message_executed_locally"
+                );
+                return ok_json(StatusCode::OK, response);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                state
+                    .metrics
+                    .messages_failed
+                    .fetch_add(1, Ordering::Relaxed);
+                warn!(
+                    message_id = %message_id,
+                    trace_id = %trace_id,
+                    from_ref = %from_ref,
+                    to_ref = %to_ref,
+                    error = %error,
+                    "message_local_execution_failed"
+                );
+                return kernel_error_response(error);
+            }
+        }
+    }
 
     let route = DestinationRoute {
         agent_ref: destination.agent_ref,
@@ -441,7 +688,10 @@ async fn send_message(
             ok_json(StatusCode::OK, response)
         }
         Err(RouterError::DeliveryTimeout) => {
-            state.metrics.messages_failed.fetch_add(1, Ordering::Relaxed);
+            state
+                .metrics
+                .messages_failed
+                .fetch_add(1, Ordering::Relaxed);
             warn!(
                 message_id = %message_id,
                 trace_id = %trace_id,
@@ -452,7 +702,10 @@ async fn send_message(
             delivery_timeout()
         }
         Err(RouterError::DestinationUnreachable { status, details }) => {
-            state.metrics.messages_failed.fetch_add(1, Ordering::Relaxed);
+            state
+                .metrics
+                .messages_failed
+                .fetch_add(1, Ordering::Relaxed);
             warn!(
                 message_id = %message_id,
                 trace_id = %trace_id,
@@ -462,6 +715,13 @@ async fn send_message(
                 "message_destination_unreachable"
             );
             destination_unreachable(status, details)
+        }
+        Err(RouterError::AckStoreError(message)) => {
+            state
+                .metrics
+                .messages_failed
+                .fetch_add(1, Ordering::Relaxed);
+            internal_error(message)
         }
     }
 }
@@ -487,8 +747,12 @@ async fn ack_message(
 
     let mut registry = state.registry.write().await;
     let source = match registry.lookup_agent_any(&request.from_ref) {
-        Some(source) => source,
-        None => return identity_mismatch(),
+        Ok(Some(source)) => source,
+        Ok(None) => return identity_mismatch(),
+        Err(RegistryError::Storage(message)) => return internal_error(message),
+        Err(RegistryError::Invalid(message)) => return invalid_payload(message.to_string()),
+        Err(RegistryError::IdentityMismatch) => return identity_mismatch(),
+        Err(RegistryError::LeaseExpired) => return lease_expired(),
     };
     drop(registry);
 
@@ -496,12 +760,257 @@ async fn ack_message(
         return identity_mismatch();
     }
 
+    if !state.kingdoms.is_allowed(&source.kingdom_id) {
+        return kingdom_not_allowed();
+    }
+
+    let ack_ctx = build_ack_execution_context(&request);
+    info!(
+        trace_id = %ack_ctx.trace_id,
+        from_ref = %ack_ctx.agent_ref,
+        tool_id = ?ack_ctx.tool_id,
+        "ack_execution_context_built"
+    );
+
     let message_id = request.message_id.clone();
     let from_ref = request.from_ref.clone();
     let mut router = state.router.write().await;
-    let response = router.record_ack(request);
+    let response = match router.record_ack(request) {
+        Ok(response) => response,
+        Err(RouterError::AckStoreError(message)) => return internal_error(message),
+        Err(RouterError::DeliveryTimeout) => return delivery_timeout(),
+        Err(RouterError::DestinationUnreachable { status, details }) => {
+            return destination_unreachable(status, details);
+        }
+    };
     info!(message_id = %message_id, from_ref = %from_ref, "ack_recorded");
     ok_json(StatusCode::OK, response)
+}
+
+fn build_send_execution_context(request: &SendRequest) -> ExecutionContext {
+    ExecutionContext {
+        trace_id: request.message.trace_id.clone(),
+        kingdom_id: request.kingdom_id.clone(),
+        agent_ref: request.message.from_ref.clone(),
+        tool_id: extract_tool_id_from_meta(&request.message.meta),
+    }
+}
+
+fn build_ack_execution_context(request: &AckRequest) -> ExecutionContext {
+    let trace_id = request
+        .result
+        .as_ref()
+        .and_then(|value| value.get("trace_id"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .unwrap_or_else(|| format!("ack:{}", request.message_id));
+
+    let tool_id = request
+        .result
+        .as_ref()
+        .and_then(|value| value.get("tool_id"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+
+    ExecutionContext {
+        trace_id,
+        kingdom_id: "unknown".to_string(),
+        agent_ref: request.from_ref.clone(),
+        tool_id,
+    }
+}
+
+fn extract_tool_id_from_meta(meta: &Option<Meta>) -> Option<String> {
+    meta.as_ref()
+        .and_then(|meta| meta.tags.as_ref())
+        .and_then(|tags| {
+            tags.iter()
+                .find_map(|tag| tag.strip_prefix("tool:").map(ToString::to_string))
+        })
+}
+
+fn try_execute_local_agent_operation(
+    ctx: &ExecutionContext,
+    message: &turingflow::tfpv1::types::Envelope,
+    destination_ref: &str,
+) -> Result<Option<SendResponse>, KernelError> {
+    if message.payload.content_type != "application/vnd.turingflow.agent-op+json" {
+        return Ok(None);
+    }
+
+    let operation = message
+        .payload
+        .body
+        .as_object()
+        .ok_or_else(|| KernelError::invalid("agent-op payload body must be an object"))?;
+
+    let op = operation
+        .get("op")
+        .and_then(Value::as_str)
+        .ok_or_else(|| KernelError::invalid("agent-op payload requires string field 'op'"))?;
+
+    let kernel = build_local_agent_kernel(&ctx.agent_ref)?;
+    match op {
+        "fs.read" => {
+            let path = operation
+                .get("path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| KernelError::invalid("fs.read requires string field 'path'"))?;
+            let _ = kernel.fs_read(
+                ctx,
+                FsReadReq {
+                    path: path.to_string(),
+                },
+            )?;
+        }
+        "fs.list" => {
+            let path = operation
+                .get("path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| KernelError::invalid("fs.list requires string field 'path'"))?;
+            let _ = kernel.fs_list(
+                ctx,
+                FsListReq {
+                    path: path.to_string(),
+                },
+            )?;
+        }
+        "fs.write" => {
+            let path = operation
+                .get("path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| KernelError::invalid("fs.write requires string field 'path'"))?;
+            let content = operation
+                .get("content")
+                .and_then(Value::as_str)
+                .ok_or_else(|| KernelError::invalid("fs.write requires string field 'content'"))?;
+            let _ = kernel.fs_write(
+                ctx,
+                FsWriteReq {
+                    path: path.to_string(),
+                    content: content.as_bytes().to_vec(),
+                },
+            )?;
+        }
+        "proc.exec" => {
+            let command = operation
+                .get("command")
+                .and_then(Value::as_str)
+                .ok_or_else(|| KernelError::invalid("proc.exec requires string field 'command'"))?;
+            let args = operation
+                .get("args")
+                .and_then(Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let _ = kernel.proc_exec(
+                ctx,
+                ProcExecReq {
+                    command: command.to_string(),
+                    args,
+                },
+            )?;
+        }
+        "net.http" => {
+            let method = operation
+                .get("method")
+                .and_then(Value::as_str)
+                .ok_or_else(|| KernelError::invalid("net.http requires string field 'method'"))?;
+            let url = operation
+                .get("url")
+                .and_then(Value::as_str)
+                .ok_or_else(|| KernelError::invalid("net.http requires string field 'url'"))?;
+            let timeout_ms = operation.get("timeout_ms").and_then(Value::as_u64);
+            let body = operation
+                .get("body")
+                .and_then(Value::as_str)
+                .map(|body| body.as_bytes().to_vec());
+            let _ = kernel.net_http(
+                ctx,
+                NetHttpReq {
+                    method: method.to_string(),
+                    url: url.to_string(),
+                    body,
+                    timeout_ms,
+                },
+            )?;
+        }
+        _ => {
+            return Err(KernelError::invalid(format!(
+                "unsupported agent operation '{}'",
+                op
+            )));
+        }
+    }
+
+    Ok(Some(SendResponse {
+        version: TFPV1_VERSION.to_string(),
+        accepted: true,
+        delivery_id: format!("local_{}_{}", now_epoch_millis(), message.message_id),
+        status: "executed_locally".to_string(),
+        destination: destination_ref.to_string(),
+    }))
+}
+
+fn build_local_agent_kernel(agent_ref: &str) -> Result<Kernel, KernelError> {
+    let root = std::env::current_dir()
+        .map_err(|error| KernelError::internal(format!("failed to resolve cwd: {error}")))?;
+    let root = std::fs::canonicalize(root)
+        .map_err(|error| KernelError::internal(format!("failed to canonicalize cwd: {error}")))?;
+
+    let policy_yaml = format!(
+        "version: 1
+defaults:
+  decision: deny
+principals:
+  - id: \"agent:{}\"
+    rules:
+      - id: \"allow-fs-read\"
+        effect: allow
+        syscall: \"fs.read\"
+        resource:
+          path_prefix:
+            - \"{}\"
+      - id: \"allow-fs-list\"
+        effect: allow
+        syscall: \"fs.list\"
+        resource:
+          path_prefix:
+            - \"{}\"
+      - id: \"allow-fs-write\"
+        effect: allow
+        syscall: \"fs.write\"
+        resource:
+          path_prefix:
+            - \"{}\"
+",
+        agent_ref,
+        root.display(),
+        root.display(),
+        root.display()
+    );
+
+    let config: PolicyConfig = serde_yaml::from_str(&policy_yaml)
+        .map_err(|error| KernelError::internal(format!("failed to parse policy: {error}")))?;
+    config
+        .validate()
+        .map_err(|error| KernelError::internal(format!("invalid policy: {error}")))?;
+
+    let fs_provider = Arc::new(HostFsProvider::new(&root)?);
+    Ok(Kernel::new(PolicyEngine::new(config), fs_provider))
+}
+
+fn now_epoch_millis() -> i64 {
+    let now = std::time::SystemTime::now();
+    now.duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| {
+            duration.as_millis().min(i64::MAX as u128) as i64
+        })
 }
 
 fn require_client_identity(
@@ -537,6 +1046,50 @@ fn replay_rejected() -> (StatusCode, Json<Value>) {
         "replay_rejected",
         "message timestamp is outside allowed replay window",
         false,
+    ))
+}
+
+fn kingdom_not_allowed() -> (StatusCode, Json<Value>) {
+    to_value_response(errors::response(
+        StatusCode::FORBIDDEN,
+        "kingdom_not_allowed",
+        "kingdom_id is not allowed by configuration",
+        false,
+    ))
+}
+
+fn payload_too_large(max_payload_bytes: usize) -> (StatusCode, Json<Value>) {
+    to_value_response(errors::response(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "payload_too_large",
+        format!("payload exceeds max_payload_bytes ({max_payload_bytes})"),
+        false,
+    ))
+}
+
+fn kernel_error_response(error: KernelError) -> (StatusCode, Json<Value>) {
+    let (status, code): (StatusCode, &'static str) = match error.code {
+        KernelErrorCode::Eacces => (StatusCode::FORBIDDEN, "EACCES"),
+        KernelErrorCode::Enoent => (StatusCode::NOT_FOUND, "ENOENT"),
+        KernelErrorCode::Einval => (StatusCode::BAD_REQUEST, "EINVAL"),
+        KernelErrorCode::Etimeout => (StatusCode::GATEWAY_TIMEOUT, "ETIMEOUT"),
+        KernelErrorCode::Eratelimit => (StatusCode::TOO_MANY_REQUESTS, "ERATELIMIT"),
+        KernelErrorCode::Einternal => (StatusCode::INTERNAL_SERVER_ERROR, "EINTERNAL"),
+    };
+    to_value_response(errors::response(
+        status,
+        code,
+        error.message,
+        error.retryable,
+    ))
+}
+
+fn internal_error(message: String) -> (StatusCode, Json<Value>) {
+    to_value_response(errors::response(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "internal_error",
+        message,
+        true,
     ))
 }
 
@@ -576,7 +1129,10 @@ fn identity_mismatch() -> (StatusCode, Json<Value>) {
     ))
 }
 
-fn destination_unreachable(status: Option<u16>, details: Option<String>) -> (StatusCode, Json<Value>) {
+fn destination_unreachable(
+    status: Option<u16>,
+    details: Option<String>,
+) -> (StatusCode, Json<Value>) {
     let details = json!({
         "status": status,
         "details": details
@@ -607,5 +1163,22 @@ fn to_value_response(
 }
 
 fn ok_json<T: serde::Serialize>(status: StatusCode, payload: T) -> (StatusCode, Json<Value>) {
-    (status, Json(serde_json::to_value(payload).unwrap_or(json!({}))))
+    (
+        status,
+        Json(serde_json::to_value(payload).unwrap_or(json!({}))),
+    )
+}
+
+fn payload_size_bytes(payload: &Value) -> usize {
+    serde_json::to_vec(payload).map_or(usize::MAX, |bytes| bytes.len())
+}
+
+fn kingdom_quotas<'a>(
+    state: &'a AppState,
+    kingdom_id: &str,
+) -> Result<&'a KingdomQuotas, (StatusCode, Json<Value>)> {
+    state
+        .kingdoms
+        .quotas_for(kingdom_id)
+        .ok_or_else(kingdom_not_allowed)
 }

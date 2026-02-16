@@ -1,6 +1,4 @@
 use std::error::Error;
-use std::fs;
-use std::path::Path;
 
 use serde::Deserialize;
 
@@ -15,8 +13,7 @@ pub struct LlmConfig {
     pub temperature: Option<f64>,
 }
 
-pub fn load_config(path: impl AsRef<Path>) -> Result<Config, Box<dyn Error>> {
-    let raw = fs::read_to_string(path)?;
+pub fn load_config_from_str(raw: &str) -> Result<Config, Box<dyn Error>> {
     let config = serde_yaml::from_str(&raw)?;
     Ok(config)
 }

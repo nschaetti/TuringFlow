@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  COVERAGE_MIN_LINES: "30"
 
 jobs:
   build:
@@ -16,7 +17,34 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Tooling host-access lint
+      run: bash scripts/check_tooling_no_direct_host_access.sh
     - name: Build
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --verbose
+
+  coverage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install cargo-llvm-cov
+      uses: taiki-e/install-action@cargo-llvm-cov
+    - name: Generate coverage (lcov + threshold)
+      run: cargo llvm-cov --workspace --lcov --output-path lcov.info --fail-under-lines $COVERAGE_MIN_LINES
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v5
+      with:
+        files: lcov.info
+        use_oidc: true
+        fail_ci_if_error: true
+        verbose: true
+    - name: Upload coverage report artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: rust-coverage-lcov
+        path: lcov.info

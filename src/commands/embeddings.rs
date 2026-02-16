@@ -1,14 +1,17 @@
 use std::error::Error;
-use std::fs;
 use std::path::Path;
 
 use turingflow::rchain::embeddings::FireworksEmbeddings;
 
+use crate::commands::runtime::ToolRuntime;
+
 pub fn run_embeddings(
+    runtime: &ToolRuntime,
     text_path: impl AsRef<Path>,
     model: impl Into<String>,
 ) -> Result<(), Box<dyn Error>> {
-    let text = fs::read_to_string(text_path)?;
+    let text_bytes = runtime.read_bytes(text_path, Some("embeddings"))?;
+    let text = String::from_utf8(text_bytes).map_err(|_| "Text input must be valid UTF-8")?;
     let embeddings = FireworksEmbeddings::new(model)?;
     let vector = embeddings.embed_query(text)?;
 

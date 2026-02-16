@@ -4,4 +4,6 @@ pub mod errors;
 pub mod mtls;
 pub mod registry;
 pub mod router;
+pub mod storage;
+pub mod system_config;
 pub mod types;

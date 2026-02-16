@@ -1,13 +1,13 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs;
-use std::collections::HashMap;
 
 use reqwest::{Client, StatusCode};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use tokio::time::{sleep, Duration, Instant};
 
+use crate::tfpv1::storage::sqlite_ack::SqliteAckStore;
 use crate::tfpv1::types::{
     AckRequest, AckResponse, Envelope, RouteHop, SendResponse, TFPV1_VERSION,
 };
@@ -22,8 +22,9 @@ pub struct DestinationRoute {
 pub struct Router {
     client: Client,
     daemon_node: String,
-    acks: HashMap<String, AckRequest>,
+    ack_store: SqliteAckStore,
     seq: u64,
+    retry_delays: Vec<Duration>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -33,17 +34,68 @@ pub struct ClientTlsConfig {
     pub client_key_path: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct RouterRetryPolicy {
+    pub retry_delays_ms: Vec<u64>,
+}
+
+impl Default for RouterRetryPolicy {
+    fn default() -> Self {
+        Self {
+            retry_delays_ms: vec![0, 250, 1000, 3000],
+        }
+    }
+}
+
 impl Router {
     pub fn new(
         daemon_node: impl Into<String>,
         tls_config: ClientTlsConfig,
     ) -> Result<Self, RouterConfigError> {
+        Self::new_with_policy(daemon_node, tls_config, RouterRetryPolicy::default())
+    }
+
+    pub fn new_with_policy(
+        daemon_node: impl Into<String>,
+        tls_config: ClientTlsConfig,
+        retry_policy: RouterRetryPolicy,
+    ) -> Result<Self, RouterConfigError> {
+        let ack_store = SqliteAckStore::in_memory();
+        Self::new_with_policy_and_ack_store(daemon_node, tls_config, retry_policy, ack_store)
+    }
+
+    pub fn new_with_policy_and_ack_store(
+        daemon_node: impl Into<String>,
+        tls_config: ClientTlsConfig,
+        retry_policy: RouterRetryPolicy,
+        ack_store: SqliteAckStore,
+    ) -> Result<Self, RouterConfigError> {
+        if retry_policy.retry_delays_ms.is_empty() {
+            return Err(RouterConfigError::InvalidRetryPolicy(
+                "retry_delays_ms must not be empty".to_string(),
+            ));
+        }
+        if retry_policy
+            .retry_delays_ms
+            .windows(2)
+            .any(|window| window[0] > window[1])
+        {
+            return Err(RouterConfigError::InvalidRetryPolicy(
+                "retry_delays_ms must be sorted ascending".to_string(),
+            ));
+        }
+
         let client = build_http_client(&tls_config)?;
         Ok(Self {
             client,
             daemon_node: daemon_node.into(),
-            acks: HashMap::new(),
+            ack_store,
             seq: 0,
+            retry_delays: retry_policy
+                .retry_delays_ms
+                .into_iter()
+                .map(Duration::from_millis)
+                .collect(),
         })
     }
 
@@ -67,7 +119,7 @@ impl Router {
 
         let url = deliver_endpoint(&destination.deliver_url);
         let deadline = Instant::now() + Duration::from_millis(message.ttl_ms);
-        let delays = [Duration::from_millis(0), Duration::from_millis(250), Duration::from_secs(1), Duration::from_secs(3)];
+        let delays = self.retry_delays.clone();
 
         let mut last_status: Option<StatusCode> = None;
         let mut last_error: Option<String> = None;
@@ -110,12 +162,14 @@ impl Router {
         })
     }
 
-    pub fn record_ack(&mut self, ack: AckRequest) -> AckResponse {
-        self.acks.insert(ack.delivery_id.clone(), ack);
-        AckResponse {
+    pub fn record_ack(&mut self, ack: AckRequest) -> Result<AckResponse, RouterError> {
+        self.ack_store
+            .record_ack(&ack)
+            .map_err(|error| RouterError::AckStoreError(error.to_string()))?;
+        Ok(AckResponse {
             version: TFPV1_VERSION.to_string(),
             accepted: true,
-        }
+        })
     }
 
     fn next_delivery_id(&mut self, now: OffsetDateTime) -> String {
@@ -132,21 +186,29 @@ pub enum RouterConfigError {
     InvalidKey(String),
     BuildClient(String),
     Io(String),
+    InvalidRetryPolicy(String),
 }
 
 impl Display for RouterConfigError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             RouterConfigError::MissingClientKey => {
-                write!(f, "upstream-client-key is required when upstream-client-cert is set")
+                write!(
+                    f,
+                    "upstream-client-key is required when upstream-client-cert is set"
+                )
             }
             RouterConfigError::MissingClientCert => {
-                write!(f, "upstream-client-cert is required when upstream-client-key is set")
+                write!(
+                    f,
+                    "upstream-client-cert is required when upstream-client-key is set"
+                )
             }
             RouterConfigError::InvalidCert(msg) => write!(f, "invalid certificate: {msg}"),
             RouterConfigError::InvalidKey(msg) => write!(f, "invalid private key: {msg}"),
             RouterConfigError::BuildClient(msg) => write!(f, "failed to build HTTP client: {msg}"),
             RouterConfigError::Io(msg) => write!(f, "I/O error: {msg}"),
+            RouterConfigError::InvalidRetryPolicy(msg) => write!(f, "invalid retry policy: {msg}"),
         }
     }
 }
@@ -165,7 +227,8 @@ fn build_http_client(tls: &ClientTlsConfig) -> Result<Client, RouterConfigError>
 
     match (&tls.client_cert_path, &tls.client_key_path) {
         (Some(cert_path), Some(key_path)) => {
-            let cert_bytes = fs::read(cert_path).map_err(|e| RouterConfigError::Io(e.to_string()))?;
+            let cert_bytes =
+                fs::read(cert_path).map_err(|e| RouterConfigError::Io(e.to_string()))?;
             let key_bytes = fs::read(key_path).map_err(|e| RouterConfigError::Io(e.to_string()))?;
             let mut identity_pem = cert_bytes;
             identity_pem.push(b'\n');
@@ -192,6 +255,7 @@ pub enum RouterError {
         status: Option<u16>,
         details: Option<String>,
     },
+    AckStoreError(String),
 }
 
 fn deliver_endpoint(base: &str) -> String {

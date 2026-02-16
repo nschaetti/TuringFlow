@@ -1,0 +1,32 @@
+version: 1
+
+server:
+  listen: 0.0.0.0:8443
+  node_id: turingflowd
+
+tls:
+  server_cert: certs/turingflowd.crt
+  server_key: certs/turingflowd.key
+  client_ca_cert: certs/ca.crt
+  upstream_ca_cert: certs/ca.crt
+  upstream_client_cert: null
+  upstream_client_key: null
+
+security:
+  replay_window_seconds: 60
+
+routing:
+  retry_delays_ms: [0, 250, 1000, 3000]
+
+storage:
+  backend: sqlite
+  sqlite:
+    path: data/turingflow.db
+
+limits:
+  max_payload_bytes: 262144
+  max_message_ttl_ms: 60000
+
+logging:
+  format: json
+  level: info

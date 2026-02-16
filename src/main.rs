@@ -7,9 +7,11 @@ use std::error::Error;
 use clap::Parser;
 
 use crate::cli::{Cli, Commands};
+use crate::commands::runtime::ToolRuntime;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
+    let runtime = ToolRuntime::new()?;
 
     match cli.command {
         Commands::Image {
@@ -19,10 +21,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             format,
             output,
         } => {
-            commands::image::run_image(image_path, prompt, config_path, format, output)?;
+            commands::image::run_image(&runtime, image_path, prompt, config_path, format, output)?;
         }
         Commands::Embeddings { text_path, model } => {
-            commands::embeddings::run_embeddings(text_path, model)?;
+            commands::embeddings::run_embeddings(&runtime, text_path, model)?;
         }
         Commands::Calc {
             prompt,

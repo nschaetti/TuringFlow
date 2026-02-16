@@ -1,0 +1,20 @@
+version: 1
+
+defaults:
+  decision: deny
+
+principals:
+  - id: "agent:planner@node-a.local"
+    rules:
+      - id: "allow-read-workspace"
+        effect: allow
+        syscall: "fs.read"
+        resource:
+          path_prefix:
+            - "/workspace/project"
+      - id: "allow-list-workspace"
+        effect: allow
+        syscall: "fs.list"
+        resource:
+          path_prefix:
+            - "/workspace/project"
