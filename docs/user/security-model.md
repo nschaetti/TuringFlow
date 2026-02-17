@@ -23,6 +23,7 @@ TuringFlow applies layered controls.
 - Syscalls are deny-by-default.
 - Policy precedence: `agent_tool` then `agent`.
 - File, process, and network access can be rejected with OS-like codes (`EACCES`, `ENOENT`, etc.).
+- User-plane communication (`user.*`) is also policy-gated through kernel syscalls.
 
 ## Auditability
 

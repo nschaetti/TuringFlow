@@ -27,6 +27,10 @@ use turingflow::kernel::policy::{PolicyConfig, PolicyEngine};
 use turingflow::kernel::syscalls::fs::{FsListReq, FsReadReq, FsWriteReq, HostFsProvider};
 use turingflow::kernel::syscalls::net::NetHttpReq;
 use turingflow::kernel::syscalls::process::ProcExecReq;
+use turingflow::kernel::syscalls::user::{
+    SqliteUserCommsProvider, UserInboxReq, UserIngestReq, UserRecvReq, UserRouteResolveReq,
+    UserSendReq,
+};
 use turingflow::kernel::Kernel;
 use turingflow::tfpv1::agent_ref::AgentRef;
 use turingflow::tfpv1::errors;
@@ -48,6 +52,7 @@ struct AppState {
     registry: Arc<RwLock<SqliteRegistry>>,
     router: Arc<RwLock<TfpRouter>>,
     dedupe: Arc<RwLock<SqliteDedupe>>,
+    sqlite_path: String,
     replay_window_seconds: i64,
     max_payload_bytes: usize,
     max_message_ttl_ms: u64,
@@ -145,7 +150,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let state = AppState {
         registry: Arc::new(RwLock::new(SqliteRegistry::new(sqlite_path.clone()))),
         router: Arc::new(RwLock::new(router)),
-        dedupe: Arc::new(RwLock::new(SqliteDedupe::new(sqlite_path))),
+        dedupe: Arc::new(RwLock::new(SqliteDedupe::new(sqlite_path.clone()))),
+        sqlite_path,
         replay_window_seconds: daemon_config.security.replay_window_seconds,
         max_payload_bytes: daemon_config.limits.max_payload_bytes,
         max_message_ttl_ms: daemon_config.limits.max_message_ttl_ms,
@@ -635,7 +641,12 @@ async fn send_message(
 
     let execution_ctx = build_send_execution_context(&request);
     if destination_is_local {
-        match try_execute_local_agent_operation(&execution_ctx, &request.message, &to_ref) {
+        match try_execute_local_agent_operation(
+            &execution_ctx,
+            &request.message,
+            &to_ref,
+            &state.sqlite_path,
+        ) {
             Ok(Some(response)) => {
                 info!(
                     message_id = %message_id,
@@ -833,6 +844,7 @@ fn try_execute_local_agent_operation(
     ctx: &ExecutionContext,
     message: &turingflow::tfpv1::types::Envelope,
     destination_ref: &str,
+    user_db_path: &str,
 ) -> Result<Option<SendResponse>, KernelError> {
     if message.payload.content_type != "application/vnd.turingflow.agent-op+json" {
         return Ok(None);
@@ -849,7 +861,7 @@ fn try_execute_local_agent_operation(
         .and_then(Value::as_str)
         .ok_or_else(|| KernelError::invalid("agent-op payload requires string field 'op'"))?;
 
-    let kernel = build_local_agent_kernel(&ctx.agent_ref)?;
+    let kernel = build_local_agent_kernel(&ctx.agent_ref, user_db_path)?;
     match op {
         "fs.read" => {
             let path = operation
@@ -940,6 +952,107 @@ fn try_execute_local_agent_operation(
                 },
             )?;
         }
+        "user.ingest" => {
+            let channel = operation
+                .get("channel")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    KernelError::invalid("user.ingest requires string field 'channel'")
+                })?;
+            let body = operation
+                .get("body")
+                .and_then(Value::as_str)
+                .ok_or_else(|| KernelError::invalid("user.ingest requires string field 'body'"))?;
+            let thread_id = operation
+                .get("thread_id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+
+            let _ = kernel.user_ingest(
+                ctx,
+                UserIngestReq {
+                    channel: channel.to_string(),
+                    thread_id,
+                    body: body.to_string(),
+                    external_message_id: None,
+                    metadata: None,
+                },
+            )?;
+        }
+        "user.recv" => {
+            let limit = operation
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(20)
+                .min(200) as usize;
+            let consume = operation
+                .get("consume")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+
+            let _ = kernel.user_recv(ctx, UserRecvReq { limit, consume })?;
+        }
+        "user.send" => {
+            let body = operation
+                .get("body")
+                .and_then(Value::as_str)
+                .ok_or_else(|| KernelError::invalid("user.send requires string field 'body'"))?;
+            let channel = operation
+                .get("channel")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            let thread_id = operation
+                .get("thread_id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+
+            let _ = kernel.user_send(
+                ctx,
+                UserSendReq {
+                    channel,
+                    thread_id,
+                    body: body.to_string(),
+                    metadata: None,
+                },
+            )?;
+        }
+        "user.inbox" => {
+            let limit = operation
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(20)
+                .min(200) as usize;
+            let include_delivered = operation
+                .get("include_delivered")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+
+            let _ = kernel.user_inbox(
+                ctx,
+                UserInboxReq {
+                    limit,
+                    include_delivered,
+                },
+            )?;
+        }
+        "user.route.resolve" => {
+            let preferred_channel = operation
+                .get("preferred_channel")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            let thread_id = operation
+                .get("thread_id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+
+            let _ = kernel.user_route_resolve(
+                ctx,
+                UserRouteResolveReq {
+                    thread_id,
+                    preferred_channel,
+                },
+            )?;
+        }
         _ => {
             return Err(KernelError::invalid(format!(
                 "unsupported agent operation '{}'",
@@ -957,7 +1070,7 @@ fn try_execute_local_agent_operation(
     }))
 }
 
-fn build_local_agent_kernel(agent_ref: &str) -> Result<Kernel, KernelError> {
+fn build_local_agent_kernel(agent_ref: &str, user_db_path: &str) -> Result<Kernel, KernelError> {
     let root = std::env::current_dir()
         .map_err(|error| KernelError::internal(format!("failed to resolve cwd: {error}")))?;
     let root = std::fs::canonicalize(root)
@@ -988,6 +1101,21 @@ principals:
         resource:
           path_prefix:
             - \"{}\"
+      - id: \"allow-user-send\"
+        effect: allow
+        syscall: \"user.send\"
+      - id: \"allow-user-recv\"
+        effect: allow
+        syscall: \"user.recv\"
+      - id: \"allow-user-ingest\"
+        effect: allow
+        syscall: \"user.ingest\"
+      - id: \"allow-user-inbox\"
+        effect: allow
+        syscall: \"user.inbox\"
+      - id: \"allow-user-route-resolve\"
+        effect: allow
+        syscall: \"user.route.resolve\"
 ",
         agent_ref,
         root.display(),
@@ -1002,7 +1130,12 @@ principals:
         .map_err(|error| KernelError::internal(format!("invalid policy: {error}")))?;
 
     let fs_provider = Arc::new(HostFsProvider::new(&root)?);
-    Ok(Kernel::new(PolicyEngine::new(config), fs_provider))
+    let user_provider = Arc::new(SqliteUserCommsProvider::new(user_db_path.to_string()));
+    Ok(Kernel::new_with_user_provider(
+        PolicyEngine::new(config),
+        fs_provider,
+        user_provider,
+    ))
 }
 
 fn now_epoch_millis() -> i64 {

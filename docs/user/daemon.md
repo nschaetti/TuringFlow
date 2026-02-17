@@ -42,5 +42,10 @@ Supported operation keys:
 - `fs.write`
 - `proc.exec`
 - `net.http`
+- `user.ingest`
+- `user.recv`
+- `user.send`
+- `user.inbox`
+- `user.route.resolve`
 
 Unauthorized operations return structured errors (for example `EACCES`).

@@ -49,3 +49,15 @@ Example rule concepts:
 - `path_prefix` for `fs.*`
 - `command_allowlist` for `proc.exec`
 - `host_allowlist` and `methods` for `net.http`
+
+## `config/channels.yaml`
+
+Defines user communication connectors and default routing.
+
+Current scope:
+
+- single-user mode (`user.mode: single`)
+- phase-1 channels: `matrix`, `email`, `webhook`
+- planned channels (disabled by default): `slack`, `discord`
+
+Connectors should map channel events into kernel `user.*` syscalls (`user.ingest`, `user.send`, `user.inbox`, `user.route.resolve`).

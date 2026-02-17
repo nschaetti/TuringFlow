@@ -45,4 +45,18 @@ pub enum Commands {
         #[arg(short = 't', long = "temperature", default_value_t = 0.0)]
         temperature: f64,
     },
+    Chat {
+        #[arg(short = 'm', long = "message")]
+        message: String,
+        #[arg(long = "channel", default_value = "cli")]
+        channel: String,
+        #[arg(long = "thread-id")]
+        thread_id: Option<String>,
+    },
+    Inbox {
+        #[arg(long = "limit", default_value_t = 20)]
+        limit: usize,
+        #[arg(long = "include-delivered", default_value_t = false)]
+        include_delivered: bool,
+    },
 }

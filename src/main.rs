@@ -33,6 +33,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         } => {
             commands::calc::run_calc(prompt, model, temperature)?;
         }
+        Commands::Chat {
+            message,
+            channel,
+            thread_id,
+        } => {
+            commands::chat::run_chat(&runtime, message, channel, thread_id)?;
+        }
+        Commands::Inbox {
+            limit,
+            include_delivered,
+        } => {
+            commands::inbox::run_inbox(&runtime, limit, include_delivered)?;
+        }
     }
 
     Ok(())

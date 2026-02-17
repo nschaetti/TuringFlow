@@ -8,6 +8,12 @@
 - `src/kernel/*`: policy engine, syscall kernel, providers, audit sink.
 - `src/commands/*`: CLI command handlers and tooling runtime wrappers.
 
+## Transport planes
+
+- Inter-agent plane: `TFPv1` (`turingflowd`) for node/agent messaging.
+- User communication plane: kernel `user.*` syscalls for messages coming from or going to the human user.
+- Channel connectors (Matrix, Email, Webhook, etc.) are adapters to the user plane, not TFPv1 peers.
+
 ## Request flow (`send`)
 
 1. Validate request and kingdom quotas.

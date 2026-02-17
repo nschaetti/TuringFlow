@@ -5,7 +5,11 @@ use std::sync::Arc;
 use turingflow::kernel::context::ExecutionContext;
 use turingflow::kernel::policy::{PolicyConfig, PolicyEngine};
 use turingflow::kernel::syscalls::fs::{FsReadReq, FsWriteReq, HostFsProvider};
+use turingflow::kernel::syscalls::user::{
+    SqliteUserCommsProvider, UserInboxReq, UserIngestReq, UserOutboundMessage,
+};
 use turingflow::kernel::Kernel;
+use turingflow::tfpv1::storage::sqlite::initialize_database;
 
 #[derive(Clone)]
 pub struct ToolRuntime {
@@ -19,6 +23,8 @@ impl ToolRuntime {
         let root = std::env::current_dir()?;
         let root = std::fs::canonicalize(root)?;
         let agent_ref = "cli@local".to_string();
+        let db_path = root.join("data").join("turingflow.db");
+        initialize_database(&db_path)?;
 
         let policy_yaml = format!(
             "version: 1
@@ -45,6 +51,18 @@ principals:
         resource:
           path_prefix:
             - \"{}\"
+      - id: \"allow-user-ingest\"
+        effect: allow
+        syscall: \"user.ingest\"
+      - id: \"allow-user-inbox\"
+        effect: allow
+        syscall: \"user.inbox\"
+      - id: \"allow-user-send\"
+        effect: allow
+        syscall: \"user.send\"
+      - id: \"allow-user-route\"
+        effect: allow
+        syscall: \"user.route.resolve\"
 ",
             agent_ref,
             root.display(),
@@ -57,7 +75,14 @@ principals:
 
         let policy = PolicyEngine::new(config);
         let fs_provider = Arc::new(HostFsProvider::new(&root)?);
-        let kernel = Arc::new(Kernel::new(policy, fs_provider));
+        let user_provider = Arc::new(SqliteUserCommsProvider::new(
+            db_path.to_string_lossy().to_string(),
+        ));
+        let kernel = Arc::new(Kernel::new_with_user_provider(
+            policy,
+            fs_provider,
+            user_provider,
+        ));
 
         Ok(Self {
             kernel,
@@ -96,6 +121,40 @@ principals:
             },
         )?;
         Ok(())
+    }
+
+    pub fn ingest_user_message(
+        &self,
+        channel: impl Into<String>,
+        body: impl Into<String>,
+        thread_id: Option<String>,
+    ) -> Result<String, Box<dyn Error>> {
+        let response = self.kernel.user_ingest(
+            &self.context(Some("chat")),
+            UserIngestReq {
+                channel: channel.into(),
+                thread_id,
+                body: body.into(),
+                external_message_id: None,
+                metadata: None,
+            },
+        )?;
+        Ok(response.message_id)
+    }
+
+    pub fn list_user_inbox(
+        &self,
+        limit: usize,
+        include_delivered: bool,
+    ) -> Result<Vec<UserOutboundMessage>, Box<dyn Error>> {
+        let response = self.kernel.user_inbox(
+            &self.context(Some("inbox")),
+            UserInboxReq {
+                limit,
+                include_delivered,
+            },
+        )?;
+        Ok(response.messages)
     }
 
     fn normalize_path(&self, path: &Path) -> Result<PathBuf, Box<dyn Error>> {

@@ -16,6 +16,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "0002_kernel_policy_audit",
         include_str!("migrations/0002_kernel_policy_audit.sql"),
     ),
+    (
+        3,
+        "0003_user_comms",
+        include_str!("migrations/0003_user_comms.sql"),
+    ),
 ];
 
 #[derive(Debug)]

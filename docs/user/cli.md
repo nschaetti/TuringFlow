@@ -1,6 +1,6 @@
 # CLI Usage
 
-`turingflow` currently exposes three commands.
+`turingflow` currently exposes five commands.
 
 ## Help
 
@@ -49,6 +49,31 @@ cargo run --bin turingflow -- calc \
   --temperature 0.0
 ```
 
+## `chat`
+
+Queue a user message for agents (user-plane ingress).
+
+```bash
+cargo run --bin turingflow -- chat \
+  --message "Planifie ma semaine" \
+  --channel cli \
+  --thread-id user-main
+```
+
+## `inbox`
+
+Read asynchronous messages posted by agents for the user.
+
+```bash
+cargo run --bin turingflow -- inbox --limit 20
+```
+
+Include already delivered records:
+
+```bash
+--include-delivered
+```
+
 ## Security note
 
-Tooling file access is routed through kernel wrappers (`ToolRuntime`) and policy checks.
+Tooling access (filesystem and user communication plane) is routed through kernel wrappers (`ToolRuntime`) and policy checks.

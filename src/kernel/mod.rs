@@ -14,6 +14,10 @@ use syscalls::fs::{
 };
 use syscalls::net::{NetHttpReq, NetHttpResp, NetworkProvider};
 use syscalls::process::{ProcExecReq, ProcExecResp, ProcessProvider};
+use syscalls::user::{
+    UserCommsProvider, UserInboxReq, UserInboxResp, UserIngestReq, UserIngestResp, UserRecvReq,
+    UserRecvResp, UserRouteResolveReq, UserRouteResolveResp, UserSendReq, UserSendResp,
+};
 
 #[derive(Clone)]
 pub struct Kernel {
@@ -21,6 +25,7 @@ pub struct Kernel {
     fs_provider: std::sync::Arc<dyn FsProvider>,
     process_provider: std::sync::Arc<dyn ProcessProvider>,
     network_provider: std::sync::Arc<dyn NetworkProvider>,
+    user_provider: std::sync::Arc<dyn UserCommsProvider>,
     audit_sink: std::sync::Arc<dyn AuditSink>,
 }
 
@@ -31,6 +36,7 @@ impl Kernel {
             fs_provider,
             std::sync::Arc::new(DenyProcessProvider),
             std::sync::Arc::new(DenyNetworkProvider),
+            std::sync::Arc::new(DenyUserCommsProvider),
             std::sync::Arc::new(NoopAuditSink),
         )
     }
@@ -46,6 +52,22 @@ impl Kernel {
             fs_provider,
             process_provider,
             network_provider,
+            std::sync::Arc::new(DenyUserCommsProvider),
+            std::sync::Arc::new(NoopAuditSink),
+        )
+    }
+
+    pub fn new_with_user_provider(
+        policy: PolicyEngine,
+        fs_provider: std::sync::Arc<dyn FsProvider>,
+        user_provider: std::sync::Arc<dyn UserCommsProvider>,
+    ) -> Self {
+        Self::new_with_providers_and_audit(
+            policy,
+            fs_provider,
+            std::sync::Arc::new(DenyProcessProvider),
+            std::sync::Arc::new(DenyNetworkProvider),
+            user_provider,
             std::sync::Arc::new(NoopAuditSink),
         )
     }
@@ -55,6 +77,7 @@ impl Kernel {
         fs_provider: std::sync::Arc<dyn FsProvider>,
         process_provider: std::sync::Arc<dyn ProcessProvider>,
         network_provider: std::sync::Arc<dyn NetworkProvider>,
+        user_provider: std::sync::Arc<dyn UserCommsProvider>,
         audit_sink: std::sync::Arc<dyn AuditSink>,
     ) -> Self {
         Self {
@@ -62,6 +85,7 @@ impl Kernel {
             fs_provider,
             process_provider,
             network_provider,
+            user_provider,
             audit_sink,
         }
     }
@@ -124,6 +148,86 @@ impl Kernel {
             }),
         )?;
         self.network_provider.http(ctx, req)
+    }
+
+    pub fn user_ingest(
+        &self,
+        ctx: &ExecutionContext,
+        req: UserIngestReq,
+    ) -> Result<UserIngestResp, KernelError> {
+        self.assert_allowed_with_resource(
+            ctx,
+            "user.ingest",
+            json!({
+                "channel": req.channel.clone(),
+                "thread_id": req.thread_id.clone(),
+            }),
+        )?;
+        self.user_provider.ingest(ctx, req)
+    }
+
+    pub fn user_recv(
+        &self,
+        ctx: &ExecutionContext,
+        req: UserRecvReq,
+    ) -> Result<UserRecvResp, KernelError> {
+        self.assert_allowed_with_resource(
+            ctx,
+            "user.recv",
+            json!({
+                "limit": req.limit,
+                "consume": req.consume,
+            }),
+        )?;
+        self.user_provider.recv(ctx, req)
+    }
+
+    pub fn user_send(
+        &self,
+        ctx: &ExecutionContext,
+        req: UserSendReq,
+    ) -> Result<UserSendResp, KernelError> {
+        self.assert_allowed_with_resource(
+            ctx,
+            "user.send",
+            json!({
+                "channel": req.channel.clone(),
+                "thread_id": req.thread_id.clone(),
+            }),
+        )?;
+        self.user_provider.send(ctx, req)
+    }
+
+    pub fn user_inbox(
+        &self,
+        ctx: &ExecutionContext,
+        req: UserInboxReq,
+    ) -> Result<UserInboxResp, KernelError> {
+        self.assert_allowed_with_resource(
+            ctx,
+            "user.inbox",
+            json!({
+                "limit": req.limit,
+                "include_delivered": req.include_delivered,
+            }),
+        )?;
+        self.user_provider.inbox(ctx, req)
+    }
+
+    pub fn user_route_resolve(
+        &self,
+        ctx: &ExecutionContext,
+        req: UserRouteResolveReq,
+    ) -> Result<UserRouteResolveResp, KernelError> {
+        self.assert_allowed_with_resource(
+            ctx,
+            "user.route.resolve",
+            json!({
+                "thread_id": req.thread_id.clone(),
+                "preferred_channel": req.preferred_channel.clone(),
+            }),
+        )?;
+        self.user_provider.route_resolve(ctx, req)
     }
 
     pub fn assert_allowed(&self, ctx: &ExecutionContext, syscall: &str) -> Result<(), KernelError> {
@@ -220,6 +324,61 @@ impl NetworkProvider for DenyNetworkProvider {
     fn http(&self, _ctx: &ExecutionContext, _req: NetHttpReq) -> Result<NetHttpResp, KernelError> {
         Err(KernelError::access_denied(
             "network provider is not configured",
+        ))
+    }
+}
+
+#[derive(Debug)]
+struct DenyUserCommsProvider;
+
+impl UserCommsProvider for DenyUserCommsProvider {
+    fn ingest(
+        &self,
+        _ctx: &ExecutionContext,
+        _req: UserIngestReq,
+    ) -> Result<UserIngestResp, KernelError> {
+        Err(KernelError::access_denied(
+            "user comms provider is not configured",
+        ))
+    }
+
+    fn recv(
+        &self,
+        _ctx: &ExecutionContext,
+        _req: UserRecvReq,
+    ) -> Result<UserRecvResp, KernelError> {
+        Err(KernelError::access_denied(
+            "user comms provider is not configured",
+        ))
+    }
+
+    fn send(
+        &self,
+        _ctx: &ExecutionContext,
+        _req: UserSendReq,
+    ) -> Result<UserSendResp, KernelError> {
+        Err(KernelError::access_denied(
+            "user comms provider is not configured",
+        ))
+    }
+
+    fn inbox(
+        &self,
+        _ctx: &ExecutionContext,
+        _req: UserInboxReq,
+    ) -> Result<UserInboxResp, KernelError> {
+        Err(KernelError::access_denied(
+            "user comms provider is not configured",
+        ))
+    }
+
+    fn route_resolve(
+        &self,
+        _ctx: &ExecutionContext,
+        _req: UserRouteResolveReq,
+    ) -> Result<UserRouteResolveResp, KernelError> {
+        Err(KernelError::access_denied(
+            "user comms provider is not configured",
         ))
     }
 }
@@ -367,6 +526,7 @@ principals:
             Arc::new(provider),
             Arc::new(super::DenyProcessProvider),
             Arc::new(super::DenyNetworkProvider),
+            Arc::new(super::DenyUserCommsProvider),
             Arc::new(audit_sink),
         );
 
