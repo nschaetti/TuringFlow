@@ -1,3 +1,5 @@
+//! SQLite-backed implementation of the TFPv1 agent registry.
+
 use std::collections::HashSet;
 
 use rusqlite::{params, OptionalExtension};
@@ -11,16 +13,24 @@ use crate::tfpv1::types::{
     ResolveResponse, TFPV1_VERSION,
 };
 
+/// Agent lookup projection used by router and daemon internals.
 #[derive(Debug, Clone)]
 pub struct AgentLookup {
+    /// Kingdom owning the route.
     pub kingdom_id: String,
+    /// Normalized agent reference.
     pub agent_ref: String,
+    /// Agent stable identifier.
     pub agent_id: String,
+    /// Node id hosting this agent.
     pub node_id: String,
+    /// Delivery URL for this agent.
     pub deliver_url: String,
+    /// Lease expiration timestamp (RFC3339).
     pub lease_expires_at: String,
 }
 
+/// Registry state persisted in SQLite.
 #[derive(Debug, Clone)]
 pub struct SqliteRegistry {
     db_path: String,
@@ -28,6 +38,7 @@ pub struct SqliteRegistry {
 }
 
 impl SqliteRegistry {
+    /// Creates a registry bound to `db_path`.
     pub fn new(db_path: impl Into<String>) -> Self {
         Self {
             db_path: db_path.into(),
@@ -35,6 +46,7 @@ impl SqliteRegistry {
         }
     }
 
+    /// Registers agents for a node and allocates a lease.
     pub fn register(
         &mut self,
         request: RegisterRequest,
@@ -116,6 +128,7 @@ impl SqliteRegistry {
         })
     }
 
+    /// Renews a lease heartbeat and validates ownership.
     pub fn heartbeat(
         &mut self,
         request: HeartbeatRequest,
@@ -210,6 +223,7 @@ impl SqliteRegistry {
         })
     }
 
+    /// Resolves an agent route for `(kingdom_id, agent_ref)`.
     pub fn resolve(
         &mut self,
         kingdom_id: &str,
@@ -272,6 +286,7 @@ impl SqliteRegistry {
         })
     }
 
+    /// Looks up one agent in a specific kingdom.
     pub fn lookup_agent(
         &mut self,
         kingdom_id: &str,
@@ -310,6 +325,7 @@ impl SqliteRegistry {
         Ok(record)
     }
 
+    /// Looks up one agent across all kingdoms.
     pub fn lookup_agent_any(
         &mut self,
         agent_ref: &str,
@@ -349,12 +365,14 @@ impl SqliteRegistry {
         Ok(record)
     }
 
+    /// Deletes expired leases and cascading agent rows.
     pub fn cleanup_expired_now(&mut self) -> Result<(), RegistryError> {
         let conn = open_connection(&self.db_path).map_err(RegistryError::storage)?;
         let now_ms = epoch_ms(OffsetDateTime::now_utc());
         self.cleanup_expired_inner(&conn, now_ms)
     }
 
+    /// Counts active agents registered for one node.
     pub fn count_agents_for_node(
         &mut self,
         kingdom_id: &str,
@@ -379,6 +397,7 @@ impl SqliteRegistry {
         Ok(count.max(0) as usize)
     }
 
+    /// Counts how many incoming registrations would increase node occupancy.
     pub fn additional_agents_for_node_registration(
         &mut self,
         kingdom_id: &str,
@@ -466,11 +485,16 @@ struct AgentRecord {
     expires_at_ms: i64,
 }
 
+/// Registry operation errors.
 #[derive(Debug, Clone)]
 pub enum RegistryError {
+    /// Lease does not exist or is expired.
     LeaseExpired,
+    /// Heartbeat/register identity mismatch.
     IdentityMismatch,
+    /// Invalid request payload field.
     Invalid(&'static str),
+    /// Storage/backend failure.
     Storage(String),
 }
 

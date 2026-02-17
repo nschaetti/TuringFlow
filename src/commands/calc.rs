@@ -7,6 +7,10 @@ fn multiply(a: i64, b: i64) -> i64 {
     a * b
 }
 
+/// Executes the calculator demo command.
+///
+/// It binds a simple `multiply` tool to a chat model and prints the model
+/// response and tool-assisted final answer.
 pub fn run_calc(
     prompt: impl Into<String>,
     model: impl Into<String>,

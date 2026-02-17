@@ -1,7 +1,17 @@
+//! Kernel entry-point for policy-gated syscalls.
+//!
+//! The kernel enforces authorization before delegating to syscall providers.
+//! Every decision can be audited through an [`crate::kernel::audit::AuditSink`].
+
+/// Auditing types and SQLite sink.
 pub mod audit;
+/// Request execution context and principal resolution.
 pub mod context;
+/// Kernel error model.
 pub mod errors;
+/// Policy configuration and evaluator.
 pub mod policy;
+/// Syscall request/response and provider traits.
 pub mod syscalls;
 
 use audit::{now_epoch_ms, AuditDecision, AuditRecord, AuditSink, NoopAuditSink};
@@ -19,6 +29,31 @@ use syscalls::user::{
     UserRecvResp, UserRouteResolveReq, UserRouteResolveResp, UserSendReq, UserSendResp,
 };
 
+/// Policy-enforcing syscall dispatcher.
+///
+/// # Thread safety
+///
+/// `Kernel` is `Clone` and internally shares providers with `Arc`, so it can be
+/// used concurrently across async handlers or worker threads.
+///
+/// # Example
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use turingflow::kernel::policy::{PolicyConfig, PolicyEngine};
+/// use turingflow::kernel::syscalls::fs::HostFsProvider;
+/// use turingflow::kernel::Kernel;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let policy: PolicyConfig = serde_yaml::from_str(
+///     "version: 1\ndefaults:\n  decision: deny\nprincipals: []\n"
+/// )?;
+/// let fs = Arc::new(HostFsProvider::new(std::env::current_dir()?)?);
+/// let kernel = Kernel::new(PolicyEngine::new(policy), fs);
+/// let _ = kernel;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone)]
 pub struct Kernel {
     policy: PolicyEngine,
@@ -30,6 +65,9 @@ pub struct Kernel {
 }
 
 impl Kernel {
+    /// Creates a kernel with filesystem provider only.
+    ///
+    /// Process, network, and user communication syscalls are denied by default.
     pub fn new(policy: PolicyEngine, fs_provider: std::sync::Arc<dyn FsProvider>) -> Self {
         Self::new_with_providers_and_audit(
             policy,
@@ -41,6 +79,7 @@ impl Kernel {
         )
     }
 
+    /// Creates a kernel with filesystem, process, and network providers.
     pub fn new_with_providers(
         policy: PolicyEngine,
         fs_provider: std::sync::Arc<dyn FsProvider>,
@@ -57,6 +96,7 @@ impl Kernel {
         )
     }
 
+    /// Creates a kernel with filesystem and user communication providers.
     pub fn new_with_user_provider(
         policy: PolicyEngine,
         fs_provider: std::sync::Arc<dyn FsProvider>,
@@ -72,6 +112,7 @@ impl Kernel {
         )
     }
 
+    /// Creates a kernel with full provider and audit sink customization.
     pub fn new_with_providers_and_audit(
         policy: PolicyEngine,
         fs_provider: std::sync::Arc<dyn FsProvider>,
@@ -90,6 +131,7 @@ impl Kernel {
         }
     }
 
+    /// Executes `fs.list` after policy evaluation.
     pub fn fs_list(
         &self,
         ctx: &ExecutionContext,
@@ -99,6 +141,7 @@ impl Kernel {
         self.fs_provider.list(ctx, req)
     }
 
+    /// Executes `fs.read` after policy evaluation.
     pub fn fs_read(
         &self,
         ctx: &ExecutionContext,
@@ -108,6 +151,7 @@ impl Kernel {
         self.fs_provider.read(ctx, req)
     }
 
+    /// Executes `fs.write` after policy evaluation.
     pub fn fs_write(
         &self,
         ctx: &ExecutionContext,
@@ -117,6 +161,7 @@ impl Kernel {
         self.fs_provider.write(ctx, req)
     }
 
+    /// Executes `proc.exec` after policy evaluation.
     pub fn proc_exec(
         &self,
         ctx: &ExecutionContext,
@@ -130,6 +175,7 @@ impl Kernel {
         self.process_provider.exec(ctx, req)
     }
 
+    /// Executes `net.http` after policy evaluation.
     pub fn net_http(
         &self,
         ctx: &ExecutionContext,
@@ -150,6 +196,7 @@ impl Kernel {
         self.network_provider.http(ctx, req)
     }
 
+    /// Executes `user.ingest` after policy evaluation.
     pub fn user_ingest(
         &self,
         ctx: &ExecutionContext,
@@ -166,6 +213,7 @@ impl Kernel {
         self.user_provider.ingest(ctx, req)
     }
 
+    /// Executes `user.recv` after policy evaluation.
     pub fn user_recv(
         &self,
         ctx: &ExecutionContext,
@@ -182,6 +230,7 @@ impl Kernel {
         self.user_provider.recv(ctx, req)
     }
 
+    /// Executes `user.send` after policy evaluation.
     pub fn user_send(
         &self,
         ctx: &ExecutionContext,
@@ -198,6 +247,7 @@ impl Kernel {
         self.user_provider.send(ctx, req)
     }
 
+    /// Executes `user.inbox` after policy evaluation.
     pub fn user_inbox(
         &self,
         ctx: &ExecutionContext,
@@ -214,6 +264,7 @@ impl Kernel {
         self.user_provider.inbox(ctx, req)
     }
 
+    /// Executes `user.route.resolve` after policy evaluation.
     pub fn user_route_resolve(
         &self,
         ctx: &ExecutionContext,
@@ -230,6 +281,7 @@ impl Kernel {
         self.user_provider.route_resolve(ctx, req)
     }
 
+    /// Checks permission for a syscall without resource attributes.
     pub fn assert_allowed(&self, ctx: &ExecutionContext, syscall: &str) -> Result<(), KernelError> {
         let decision = self.policy.evaluate(ctx, syscall);
         self.audit_decision(ctx, syscall, None, &decision, 0);
@@ -243,6 +295,7 @@ impl Kernel {
         )))
     }
 
+    /// Checks permission for a syscall with resource attributes.
     pub fn assert_allowed_with_resource(
         &self,
         ctx: &ExecutionContext,

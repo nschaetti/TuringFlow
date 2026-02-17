@@ -1,3 +1,5 @@
+//! TFPv1 outbound router.
+
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs;
@@ -12,12 +14,16 @@ use crate::tfpv1::types::{
     AckRequest, AckResponse, Envelope, RouteHop, SendResponse, TFPV1_VERSION,
 };
 
+/// Destination route resolved by registry.
 #[derive(Debug, Clone)]
 pub struct DestinationRoute {
+    /// Target agent reference.
     pub agent_ref: String,
+    /// Base delivery URL for target node.
     pub deliver_url: String,
 }
 
+/// Message router with retry policy and ACK persistence.
 #[derive(Debug)]
 pub struct Router {
     client: Client,
@@ -27,15 +33,21 @@ pub struct Router {
     retry_delays: Vec<Duration>,
 }
 
+/// TLS settings for upstream delivery HTTP client.
 #[derive(Debug, Clone, Default)]
 pub struct ClientTlsConfig {
+    /// Optional CA certificate path used to validate server certificates.
     pub ca_cert_path: Option<String>,
+    /// Optional mTLS client certificate path.
     pub client_cert_path: Option<String>,
+    /// Optional mTLS client private key path.
     pub client_key_path: Option<String>,
 }
 
+/// Retry policy for message forwarding.
 #[derive(Debug, Clone)]
 pub struct RouterRetryPolicy {
+    /// Retry delays in ascending order, in milliseconds.
     pub retry_delays_ms: Vec<u64>,
 }
 
@@ -48,6 +60,7 @@ impl Default for RouterRetryPolicy {
 }
 
 impl Router {
+    /// Creates a router with default retry policy and in-memory ACK store.
     pub fn new(
         daemon_node: impl Into<String>,
         tls_config: ClientTlsConfig,
@@ -55,6 +68,7 @@ impl Router {
         Self::new_with_policy(daemon_node, tls_config, RouterRetryPolicy::default())
     }
 
+    /// Creates a router with explicit retry policy and in-memory ACK store.
     pub fn new_with_policy(
         daemon_node: impl Into<String>,
         tls_config: ClientTlsConfig,
@@ -64,6 +78,7 @@ impl Router {
         Self::new_with_policy_and_ack_store(daemon_node, tls_config, retry_policy, ack_store)
     }
 
+    /// Creates a router with explicit retry policy and ACK store.
     pub fn new_with_policy_and_ack_store(
         daemon_node: impl Into<String>,
         tls_config: ClientTlsConfig,
@@ -99,6 +114,7 @@ impl Router {
         })
     }
 
+    /// Forwards one message to a resolved destination.
     pub async fn forward_message(
         &mut self,
         mut message: Envelope,
@@ -162,6 +178,7 @@ impl Router {
         })
     }
 
+    /// Persists one ACK event.
     pub fn record_ack(&mut self, ack: AckRequest) -> Result<AckResponse, RouterError> {
         self.ack_store
             .record_ack(&ack)
@@ -178,6 +195,7 @@ impl Router {
     }
 }
 
+/// Router configuration errors.
 #[derive(Debug)]
 pub enum RouterConfigError {
     MissingClientKey,
@@ -248,6 +266,7 @@ fn build_http_client(tls: &ClientTlsConfig) -> Result<Client, RouterConfigError>
         .map_err(|e| RouterConfigError::BuildClient(e.to_string()))
 }
 
+/// Router runtime errors.
 #[derive(Debug)]
 pub enum RouterError {
     DeliveryTimeout,

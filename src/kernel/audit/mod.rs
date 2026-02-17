@@ -1,3 +1,5 @@
+//! Audit records for kernel policy decisions.
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use rusqlite::params;
@@ -5,9 +7,12 @@ use rusqlite::params;
 use crate::kernel::errors::KernelErrorCode;
 use crate::tfpv1::storage::sqlite::open_connection;
 
+/// Policy decision kind stored in audit records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditDecision {
+    /// Request was allowed.
     Allow,
+    /// Request was denied.
     Deny,
 }
 
@@ -20,27 +25,44 @@ impl AuditDecision {
     }
 }
 
+/// Single audit row written by the kernel.
 #[derive(Debug, Clone)]
 pub struct AuditRecord {
+    /// Decision timestamp in epoch milliseconds.
     pub ts_ms: i64,
+    /// Distributed trace identifier.
     pub trace_id: String,
+    /// Isolation domain.
     pub kingdom_id: String,
+    /// Effective principal that matched the policy.
     pub principal_id: Option<String>,
+    /// Agent reference from execution context.
     pub agent_ref: String,
+    /// Optional tool id from execution context.
     pub tool_id: Option<String>,
+    /// Syscall name.
     pub syscall: String,
+    /// Serialized resource payload used for matching.
     pub resource_json: Option<String>,
+    /// Decision outcome.
     pub decision: AuditDecision,
+    /// Matching policy rule id.
     pub rule_id: Option<String>,
+    /// Error code when denied/failed.
     pub error_code: Option<KernelErrorCode>,
+    /// Human-readable error details.
     pub error_message: Option<String>,
+    /// Provider call latency.
     pub latency_ms: i64,
 }
 
+/// Sink for audit records.
 pub trait AuditSink: Send + Sync {
+    /// Records one audit event.
     fn record(&self, record: &AuditRecord);
 }
 
+/// No-op sink useful in tests or minimal setups.
 #[derive(Debug, Default)]
 pub struct NoopAuditSink;
 
@@ -48,6 +70,7 @@ impl AuditSink for NoopAuditSink {
     fn record(&self, _record: &AuditRecord) {}
 }
 
+/// SQLite-backed audit sink with periodic retention purge.
 #[derive(Debug)]
 pub struct SqliteAuditSink {
     db_path: String,
@@ -57,6 +80,9 @@ pub struct SqliteAuditSink {
 }
 
 impl SqliteAuditSink {
+    /// Creates a sink.
+    ///
+    /// `purge_every` is clamped to at least `1` to avoid division-by-zero.
     pub fn new(db_path: impl Into<String>, retention_ms: i64, purge_every: u64) -> Self {
         Self {
             db_path: db_path.into(),
@@ -133,6 +159,7 @@ impl AuditSink for SqliteAuditSink {
     }
 }
 
+/// Returns current UNIX epoch time in milliseconds.
 pub fn now_epoch_ms() -> i64 {
     let now = std::time::SystemTime::now();
     match now.duration_since(std::time::UNIX_EPOCH) {

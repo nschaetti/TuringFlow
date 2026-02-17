@@ -1,3 +1,5 @@
+//! SQLite bootstrap and migration runner.
+
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs;
@@ -21,11 +23,19 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "0003_user_comms",
         include_str!("migrations/0003_user_comms.sql"),
     ),
+    (
+        4,
+        "0004_user_channel_offsets",
+        include_str!("migrations/0004_user_channel_offsets.sql"),
+    ),
 ];
 
+/// SQLite storage initialization errors.
 #[derive(Debug)]
 pub enum SqliteStorageError {
+    /// Filesystem error.
     Io(String),
+    /// SQLite driver/query error.
     Sqlite(String),
 }
 
@@ -46,6 +56,9 @@ impl From<rusqlite::Error> for SqliteStorageError {
     }
 }
 
+/// Initializes a SQLite database and applies pending migrations.
+///
+/// This function is idempotent and safe to call repeatedly.
 pub fn initialize_database(path: impl AsRef<Path>) -> Result<(), SqliteStorageError> {
     let path = path.as_ref();
 
@@ -61,6 +74,7 @@ pub fn initialize_database(path: impl AsRef<Path>) -> Result<(), SqliteStorageEr
     Ok(())
 }
 
+/// Opens a SQLite connection with runtime pragmas enabled.
 pub fn open_connection(path: impl AsRef<Path>) -> Result<Connection, SqliteStorageError> {
     let conn = Connection::open(path)?;
     apply_runtime_pragmas(&conn)?;

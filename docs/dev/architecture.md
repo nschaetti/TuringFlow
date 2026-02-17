@@ -13,6 +13,7 @@
 - Inter-agent plane: `TFPv1` (`turingflowd`) for node/agent messaging.
 - User communication plane: kernel `user.*` syscalls for messages coming from or going to the human user.
 - Channel connectors (Matrix, Email, Webhook, etc.) are adapters to the user plane, not TFPv1 peers.
+- A Matrix connector worker currently runs in `turingflowd` and syncs `user_inbound` / `user_outbound` queues.
 
 ## Request flow (`send`)
 

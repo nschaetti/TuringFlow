@@ -1,0 +1,46 @@
+version: 1
+
+user:
+  mode: single
+  id: user-main
+
+defaults:
+  preferred_channel: matrix
+
+channels:
+  matrix:
+    enabled: true
+    homeserver: https://matrix.example.org
+    access_token_env: MATRIX_ACCESS_TOKEN
+    room_id: "!replace_me:matrix.example.org"
+    poll_interval_ms: 1500
+    sync_timeout_ms: 15000
+
+  email:
+    enabled: true
+    imap:
+      host: imap.example.org
+      port: 993
+      username_env: EMAIL_IMAP_USERNAME
+      password_env: EMAIL_IMAP_PASSWORD
+      use_tls: true
+    smtp:
+      host: smtp.example.org
+      port: 587
+      username_env: EMAIL_SMTP_USERNAME
+      password_env: EMAIL_SMTP_PASSWORD
+      use_starttls: true
+
+  webhook:
+    enabled: true
+    bind: 0.0.0.0:9080
+    path: /user/webhook
+    secret_env: WEBHOOK_SHARED_SECRET
+
+  slack:
+    enabled: false
+    bot_token_env: SLACK_BOT_TOKEN
+
+  discord:
+    enabled: false
+    bot_token_env: DISCORD_BOT_TOKEN

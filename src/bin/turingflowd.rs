@@ -42,10 +42,13 @@ use turingflow::tfpv1::storage::sqlite::initialize_database;
 use turingflow::tfpv1::storage::sqlite_ack::SqliteAckStore;
 use turingflow::tfpv1::storage::sqlite_dedupe::{within_replay_window, DedupeResult, SqliteDedupe};
 use turingflow::tfpv1::storage::sqlite_registry::{RegistryError, SqliteRegistry};
+use turingflow::tfpv1::storage::sqlite_user_comms::{list_user_inbound, list_user_outbound};
 use turingflow::tfpv1::system_config::{DaemonConfig, KingdomQuotas, KingdomsConfig};
 use turingflow::tfpv1::types::{
     AckRequest, HeartbeatRequest, Meta, RegisterRequest, SendRequest, SendResponse, TFPV1_VERSION,
 };
+use turingflow::user_channels::config::ChannelsConfig;
+use turingflow::user_channels::matrix::spawn_matrix_worker;
 
 #[derive(Clone)]
 struct AppState {
@@ -97,6 +100,13 @@ struct ResolveQuery {
     kingdom_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct DebugUserQuery {
+    limit: Option<usize>,
+    include_acked: Option<bool>,
+    include_delivered: Option<bool>,
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "turingflowd", version, about = "TuringFlow daemon")]
 struct Args {
@@ -104,6 +114,8 @@ struct Args {
     config: PathBuf,
     #[arg(long = "kingdoms-config", default_value = "config/kingdoms.yaml")]
     kingdoms_config: PathBuf,
+    #[arg(long = "channels-config", default_value = "config/channels.yaml")]
+    channels_config: PathBuf,
 }
 
 #[tokio::main]
@@ -113,6 +125,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     let daemon_config = DaemonConfig::from_file(&args.config)?;
     let kingdoms_config = KingdomsConfig::from_file(&args.kingdoms_config)?;
+    let channels_config = ChannelsConfig::from_file(&args.channels_config)?;
 
     let sqlite_path = daemon_config.storage.sqlite.path.clone();
     initialize_database(&sqlite_path)?;
@@ -159,6 +172,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         metrics: Arc::new(Metrics::default()),
     };
 
+    if channels_config.channels.matrix.enabled {
+        spawn_matrix_worker(
+            channels_config.channels.matrix.clone(),
+            state.sqlite_path.clone(),
+        );
+    }
+
     let gc_state = state.clone();
     tokio::spawn(async move {
         loop {
@@ -184,7 +204,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .route("/agents/heartbeat", post(heartbeat_agent))
                 .route("/agents/resolve/{agent_ref}", get(resolve_agent))
                 .route("/messages/send", post(send_message))
-                .route("/messages/ack", post(ack_message)),
+                .route("/messages/ack", post(ack_message))
+                .route("/debug/user-queues", get(debug_user_queues)),
         )
         .with_state(state);
 
@@ -796,6 +817,41 @@ async fn ack_message(
     };
     info!(message_id = %message_id, from_ref = %from_ref, "ack_recorded");
     ok_json(StatusCode::OK, response)
+}
+
+async fn debug_user_queues(
+    State(state): State<AppState>,
+    identity: Option<Extension<ClientIdentity>>,
+    Query(query): Query<DebugUserQuery>,
+) -> (StatusCode, Json<Value>) {
+    if let Err(error) = require_client_identity(identity) {
+        return error;
+    }
+
+    let limit = query.limit.unwrap_or(50).clamp(1, 500);
+    let include_acked = query.include_acked.unwrap_or(false);
+    let include_delivered = query.include_delivered.unwrap_or(false);
+
+    let inbound = match list_user_inbound(&state.sqlite_path, limit, include_acked) {
+        Ok(rows) => rows,
+        Err(error) => return internal_error(error.to_string()),
+    };
+    let outbound = match list_user_outbound(&state.sqlite_path, limit, include_delivered) {
+        Ok(rows) => rows,
+        Err(error) => return internal_error(error.to_string()),
+    };
+
+    ok_json(
+        StatusCode::OK,
+        json!({
+            "version": TFPV1_VERSION,
+            "limit": limit,
+            "include_acked": include_acked,
+            "include_delivered": include_delivered,
+            "inbound": inbound,
+            "outbound": outbound,
+        }),
+    )
 }
 
 fn build_send_execution_context(request: &SendRequest) -> ExecutionContext {

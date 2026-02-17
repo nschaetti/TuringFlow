@@ -1,17 +1,22 @@
+//! In-memory dedupe helpers.
+
 use std::collections::HashMap;
 
 use time::OffsetDateTime;
 
+/// In-memory dedupe cache keyed by message id.
 #[derive(Debug, Default)]
 pub struct DedupeCache {
     entries: HashMap<String, OffsetDateTime>,
 }
 
 impl DedupeCache {
+    /// Creates an empty cache.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Inserts message id when absent and returns insertion status.
     pub fn check_and_insert(
         &mut self,
         message_id: &str,
@@ -27,10 +32,12 @@ impl DedupeCache {
         DedupeResult::Inserted
     }
 
+    /// Purges expired cache entries.
     pub fn cleanup_expired_now(&mut self) {
         self.cleanup_expired(OffsetDateTime::now_utc());
     }
 
+    /// Returns number of live entries.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -40,12 +47,16 @@ impl DedupeCache {
     }
 }
 
+/// Dedupe insertion result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DedupeResult {
+    /// Entry inserted.
     Inserted,
+    /// Entry already existed.
     Duplicate,
 }
 
+/// Checks if a timestamp is inside replay-window tolerance.
 pub fn within_replay_window(
     message_ts: OffsetDateTime,
     now: OffsetDateTime,

@@ -1,17 +1,25 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+/// Stable error codes returned by kernel syscalls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KernelErrorCode {
+    /// Permission denied.
     Eacces,
+    /// Resource not found.
     Enoent,
+    /// Invalid input.
     Einval,
+    /// Timeout.
     Etimeout,
+    /// Rate-limit reached.
     Eratelimit,
+    /// Internal/unknown error.
     Einternal,
 }
 
 impl KernelErrorCode {
+    /// Converts the error code to an OS-like uppercase token.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Eacces => "EACCES",
@@ -24,14 +32,19 @@ impl KernelErrorCode {
     }
 }
 
+/// Kernel syscall error with retry semantics.
 #[derive(Debug, Clone)]
 pub struct KernelError {
+    /// Machine-readable error code.
     pub code: KernelErrorCode,
+    /// Human-readable explanation.
     pub message: String,
+    /// Whether retrying might succeed without changing inputs.
     pub retryable: bool,
 }
 
 impl KernelError {
+    /// Creates an access denied (`EACCES`) error.
     pub fn access_denied(message: impl Into<String>) -> Self {
         Self {
             code: KernelErrorCode::Eacces,
@@ -40,6 +53,7 @@ impl KernelError {
         }
     }
 
+    /// Creates an invalid-input (`EINVAL`) error.
     pub fn invalid(message: impl Into<String>) -> Self {
         Self {
             code: KernelErrorCode::Einval,
@@ -48,6 +62,7 @@ impl KernelError {
         }
     }
 
+    /// Creates a not-found (`ENOENT`) error.
     pub fn not_found(message: impl Into<String>) -> Self {
         Self {
             code: KernelErrorCode::Enoent,
@@ -56,6 +71,7 @@ impl KernelError {
         }
     }
 
+    /// Creates an internal (`EINTERNAL`) error.
     pub fn internal(message: impl Into<String>) -> Self {
         Self {
             code: KernelErrorCode::Einternal,

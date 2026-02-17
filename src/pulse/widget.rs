@@ -1,28 +1,35 @@
 use crate::pulse::layout::Container;
 use crate::pulse::theme::Theme;
 
+/// Leaf text widget.
 #[derive(Debug, Clone)]
 pub struct TextBox {
     text: String,
 }
 
 impl TextBox {
+    /// Creates a text box.
     pub fn new(text: impl Into<String>) -> Self {
         Self { text: text.into() }
     }
 
+    /// Returns inner text.
     pub fn text(&self) -> &str {
         &self.text
     }
 }
 
+/// Polymorphic widget node.
 #[derive(Debug, Clone)]
 pub enum WidgetNode {
+    /// Container node.
     Container(Container),
+    /// Text leaf node.
     TextBox(TextBox),
 }
 
 impl WidgetNode {
+    /// Renders the widget tree into printable lines.
     pub fn render_lines(&self, theme: &Theme) -> Vec<String> {
         match self {
             WidgetNode::TextBox(text_box) => vec![format!(

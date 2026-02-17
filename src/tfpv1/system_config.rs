@@ -1,3 +1,5 @@
+//! Runtime configuration schemas for daemon and kingdoms.
+
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs;
@@ -6,19 +8,29 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+/// Main daemon configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DaemonConfig {
+    /// Schema version.
     pub version: u32,
+    /// Server section.
     pub server: ServerConfig,
+    /// TLS section.
     pub tls: TlsConfig,
+    /// Security section.
     pub security: SecurityConfig,
+    /// Routing section.
     pub routing: RoutingConfig,
+    /// Storage section.
     pub storage: StorageConfig,
+    /// Limits section.
     pub limits: LimitsConfig,
+    /// Logging section.
     pub logging: LoggingConfig,
 }
 
 impl DaemonConfig {
+    /// Loads and validates daemon config from YAML.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
         let raw = fs::read_to_string(path)?;
         let config: Self = serde_yaml::from_str(&raw)?;
@@ -26,10 +38,12 @@ impl DaemonConfig {
         Ok(config)
     }
 
+    /// Parses `server.listen` into a socket address.
     pub fn listen_addr(&self) -> Result<SocketAddr, Box<dyn Error>> {
         Ok(self.server.listen.parse()?)
     }
 
+    /// Validates daemon configuration invariants.
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.version != 1 {
             return Err("config version must be 1".into());
@@ -93,52 +107,77 @@ impl DaemonConfig {
     }
 }
 
+/// Server configuration section.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerConfig {
+    /// Socket address to bind (`host:port`).
     pub listen: String,
+    /// Node identifier.
     pub node_id: String,
 }
 
+/// TLS configuration section.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TlsConfig {
+    /// Server certificate path.
     pub server_cert: String,
+    /// Server private key path.
     pub server_key: String,
+    /// Client CA certificate path.
     pub client_ca_cert: String,
+    /// Optional upstream CA path.
     pub upstream_ca_cert: Option<String>,
+    /// Optional upstream client certificate path.
     pub upstream_client_cert: Option<String>,
+    /// Optional upstream client key path.
     pub upstream_client_key: Option<String>,
 }
 
+/// Security settings.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SecurityConfig {
+    /// Allowed replay window in seconds.
     pub replay_window_seconds: i64,
 }
 
+/// Router settings.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RoutingConfig {
+    /// Retry delays in milliseconds.
     pub retry_delays_ms: Vec<u64>,
 }
 
+/// Storage settings.
 #[derive(Debug, Clone, Deserialize)]
 pub struct StorageConfig {
+    /// Storage backend (`sqlite`).
     pub backend: String,
+    /// SQLite-specific settings.
     pub sqlite: SqliteConfig,
 }
 
+/// SQLite storage section.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SqliteConfig {
+    /// Database file path.
     pub path: String,
 }
 
+/// Message and payload limits.
 #[derive(Debug, Clone, Deserialize)]
 pub struct LimitsConfig {
+    /// Maximum payload bytes.
     pub max_payload_bytes: usize,
+    /// Maximum message TTL in milliseconds.
     pub max_message_ttl_ms: u64,
 }
 
+/// Logging settings.
 #[derive(Debug, Clone, Deserialize)]
 pub struct LoggingConfig {
+    /// Log format (`json` or `plain`).
     pub format: String,
+    /// Log level name.
     pub level: String,
 }
 
@@ -157,6 +196,7 @@ impl LoggingConfig {
         Ok(())
     }
 
+    /// Converts configured level name to `tracing::Level`.
     pub fn level(&self) -> tracing::Level {
         match self.level.as_str() {
             "trace" => tracing::Level::TRACE,
@@ -168,13 +208,17 @@ impl LoggingConfig {
     }
 }
 
+/// Kingdom allowlist and quotas configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct KingdomsConfig {
+    /// Schema version.
     pub version: u32,
+    /// Kingdom entries.
     pub kingdoms: Vec<KingdomEntry>,
 }
 
 impl KingdomsConfig {
+    /// Loads and validates kingdoms config from YAML.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
         let raw = fs::read_to_string(path)?;
         let config: Self = serde_yaml::from_str(&raw)?;
@@ -182,6 +226,7 @@ impl KingdomsConfig {
         Ok(config)
     }
 
+    /// Validates kingdoms invariants.
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.version != 1 {
             return Err("kingdoms config version must be 1".into());
@@ -204,6 +249,7 @@ impl KingdomsConfig {
         Ok(())
     }
 
+    /// Returns quotas for an enabled kingdom.
     pub fn quotas_for(&self, kingdom_id: &str) -> Option<&KingdomQuotas> {
         self.kingdoms
             .iter()
@@ -211,10 +257,12 @@ impl KingdomsConfig {
             .map(|kingdom| &kingdom.quotas)
     }
 
+    /// Returns whether a kingdom is enabled.
     pub fn is_allowed(&self, kingdom_id: &str) -> bool {
         self.quotas_for(kingdom_id).is_some()
     }
 
+    /// Returns map of allowed kingdom ids to quotas.
     pub fn allowed_kingdoms(&self) -> HashMap<String, KingdomQuotas> {
         self.kingdoms
             .iter()
@@ -224,11 +272,15 @@ impl KingdomsConfig {
     }
 }
 
+/// One kingdom entry in the allowlist.
 #[derive(Debug, Clone, Deserialize)]
 pub struct KingdomEntry {
+    /// Kingdom identifier.
     pub id: String,
+    /// Whether this kingdom is enabled.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    /// Quotas applied to this kingdom.
     pub quotas: KingdomQuotas,
 }
 
@@ -236,11 +288,16 @@ fn default_enabled() -> bool {
     true
 }
 
+/// Resource quotas applied per kingdom.
 #[derive(Debug, Clone, Deserialize)]
 pub struct KingdomQuotas {
+    /// Maximum concurrent agents per node.
     pub max_agents_per_node: usize,
+    /// Maximum lease TTL for registration.
     pub max_lease_ttl_ms: u64,
+    /// Maximum message TTL accepted.
     pub max_message_ttl_ms: u64,
+    /// Maximum payload size accepted.
     pub max_payload_bytes: usize,
 }
 

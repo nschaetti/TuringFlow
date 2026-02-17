@@ -4,55 +4,90 @@ use std::path::{Component, Path, PathBuf};
 use crate::kernel::context::ExecutionContext;
 use crate::kernel::errors::KernelError;
 
+/// Request payload for `fs.list`.
 #[derive(Debug, Clone)]
 pub struct FsListReq {
+    /// Absolute or root-relative directory path.
     pub path: String,
 }
 
+/// Single directory entry returned by `fs.list`.
 #[derive(Debug, Clone)]
 pub struct FsListEntry {
+    /// Entry file name (not a full path).
     pub name: String,
+    /// Whether this entry is a directory.
     pub is_dir: bool,
 }
 
+/// Response payload for `fs.list`.
 #[derive(Debug, Clone)]
 pub struct FsListResp {
+    /// Lexicographically sorted entries.
     pub entries: Vec<FsListEntry>,
 }
 
+/// Request payload for `fs.read`.
 #[derive(Debug, Clone)]
 pub struct FsReadReq {
+    /// Absolute or root-relative file path.
     pub path: String,
 }
 
+/// Response payload for `fs.read`.
 #[derive(Debug, Clone)]
 pub struct FsReadResp {
+    /// Full file bytes.
     pub content: Vec<u8>,
 }
 
+/// Request payload for `fs.write`.
 #[derive(Debug, Clone)]
 pub struct FsWriteReq {
+    /// Absolute or root-relative file path.
     pub path: String,
+    /// File content to write atomically via `std::fs::write`.
     pub content: Vec<u8>,
 }
 
+/// Response payload for `fs.write`.
 #[derive(Debug, Clone)]
 pub struct FsWriteResp {
+    /// Number of bytes written.
     pub bytes_written: usize,
 }
 
+/// Filesystem syscall provider.
+///
+/// Implementors must be `Send + Sync` because they can be shared across threads
+/// behind [`std::sync::Arc`].
 pub trait FsProvider: Send + Sync {
+    /// Lists a directory.
     fn list(&self, _ctx: &ExecutionContext, _req: FsListReq) -> Result<FsListResp, KernelError>;
+    /// Reads a file.
     fn read(&self, _ctx: &ExecutionContext, _req: FsReadReq) -> Result<FsReadResp, KernelError>;
+    /// Writes file content.
     fn write(&self, _ctx: &ExecutionContext, _req: FsWriteReq) -> Result<FsWriteResp, KernelError>;
 }
 
+/// Host-backed filesystem provider confined to a canonical root.
+///
+/// # Security
+///
+/// The provider rejects traversal components (`..`, `.`), canonicalizes paths,
+/// and enforces that resulting paths stay under `root`.
 #[derive(Debug, Clone)]
 pub struct HostFsProvider {
     root: PathBuf,
 }
 
 impl HostFsProvider {
+    /// Creates a provider pinned to `root`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError`] if `root` cannot be canonicalized or is not a
+    /// directory.
     pub fn new(root: impl Into<PathBuf>) -> Result<Self, KernelError> {
         let root = root.into();
         let root = fs::canonicalize(&root).map_err(|error| {

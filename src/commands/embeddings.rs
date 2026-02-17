@@ -5,6 +5,9 @@ use turingflow::rchain::embeddings::FireworksEmbeddings;
 
 use crate::commands::runtime::ToolRuntime;
 
+/// Executes the embeddings command.
+///
+/// Loads UTF-8 text through the kernel runtime and prints basic embedding stats.
 pub fn run_embeddings(
     runtime: &ToolRuntime,
     text_path: impl AsRef<Path>,

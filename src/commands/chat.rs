@@ -2,6 +2,9 @@ use std::error::Error;
 
 use crate::commands::runtime::ToolRuntime;
 
+/// Handles the `turingflow chat` command.
+///
+/// Queues a user-originated message in the user-plane inbound queue.
 pub fn run_chat(
     runtime: &ToolRuntime,
     message: impl Into<String>,

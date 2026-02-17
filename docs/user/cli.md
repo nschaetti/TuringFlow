@@ -1,6 +1,6 @@
 # CLI Usage
 
-`turingflow` currently exposes five commands.
+`turingflow` currently exposes six commands.
 
 ## Help
 
@@ -72,6 +72,14 @@ Include already delivered records:
 
 ```bash
 --include-delivered
+```
+
+## `debug-user`
+
+Show user-plane queues directly from SQLite for end-to-end debugging.
+
+```bash
+cargo run --bin turingflow -- debug-user --limit 50 --include-acked --include-delivered
 ```
 
 ## Security note

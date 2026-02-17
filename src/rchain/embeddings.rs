@@ -4,6 +4,7 @@ use std::error::Error;
 use reqwest::blocking::Client;
 use serde_json::json;
 
+/// Fireworks embeddings client.
 #[derive(Debug, Clone)]
 pub struct FireworksEmbeddings {
     model: String,
@@ -13,6 +14,7 @@ pub struct FireworksEmbeddings {
 }
 
 impl FireworksEmbeddings {
+    /// Creates a new client from model id and `FIREWORKS_API_KEY` env var.
     pub fn new(model: impl Into<String>) -> Result<Self, Box<dyn Error>> {
         let api_key = env::var("FIREWORKS_API_KEY")
             .map_err(|_| "FIREWORKS_API_KEY is not set in the environment")?;
@@ -24,6 +26,7 @@ impl FireworksEmbeddings {
         })
     }
 
+    /// Embeds a single query string and returns the dense vector.
     pub fn embed_query(&self, input: impl Into<String>) -> Result<Vec<f64>, Box<dyn Error>> {
         let payload = json!({
             "model": self.model,

@@ -10,15 +10,24 @@ use turingflow::kernel::syscalls::user::{
 };
 use turingflow::kernel::Kernel;
 use turingflow::tfpv1::storage::sqlite::initialize_database;
+use turingflow::tfpv1::storage::sqlite_user_comms::{
+    list_user_inbound, list_user_outbound, UserInboundRecord, UserOutboundRecord,
+};
 
+/// Shared runtime used by CLI command handlers.
+///
+/// It embeds a local kernel instance with filesystem and user communication
+/// providers backed by SQLite.
 #[derive(Clone)]
 pub struct ToolRuntime {
     kernel: Arc<Kernel>,
     root: PathBuf,
+    db_path: PathBuf,
     agent_ref: String,
 }
 
 impl ToolRuntime {
+    /// Creates a runtime rooted at the current working directory.
     pub fn new() -> Result<Self, Box<dyn Error>> {
         let root = std::env::current_dir()?;
         let root = std::fs::canonicalize(root)?;
@@ -87,10 +96,12 @@ principals:
         Ok(Self {
             kernel,
             root,
+            db_path,
             agent_ref,
         })
     }
 
+    /// Reads file bytes through kernel `fs.read`.
     pub fn read_bytes(
         &self,
         path: impl AsRef<Path>,
@@ -106,6 +117,7 @@ principals:
         Ok(response.content)
     }
 
+    /// Writes file bytes through kernel `fs.write`.
     pub fn write_bytes(
         &self,
         path: impl AsRef<Path>,
@@ -123,6 +135,7 @@ principals:
         Ok(())
     }
 
+    /// Queues an inbound user message through kernel `user.ingest`.
     pub fn ingest_user_message(
         &self,
         channel: impl Into<String>,
@@ -142,6 +155,7 @@ principals:
         Ok(response.message_id)
     }
 
+    /// Lists outbound queue entries via kernel `user.inbox`.
     pub fn list_user_inbox(
         &self,
         limit: usize,
@@ -155,6 +169,19 @@ principals:
             },
         )?;
         Ok(response.messages)
+    }
+
+    /// Reads inbound/outbound queues directly from SQLite for debugging.
+    pub fn debug_user_queues(
+        &self,
+        limit: usize,
+        include_acked: bool,
+        include_delivered: bool,
+    ) -> Result<(Vec<UserInboundRecord>, Vec<UserOutboundRecord>), Box<dyn Error>> {
+        let db_path = self.db_path.to_string_lossy().to_string();
+        let inbound = list_user_inbound(&db_path, limit, include_acked)?;
+        let outbound = list_user_outbound(&db_path, limit, include_delivered)?;
+        Ok((inbound, outbound))
     }
 
     fn normalize_path(&self, path: &Path) -> Result<PathBuf, Box<dyn Error>> {

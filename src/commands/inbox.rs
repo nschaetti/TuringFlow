@@ -2,6 +2,9 @@ use std::error::Error;
 
 use crate::commands::runtime::ToolRuntime;
 
+/// Handles the `turingflow inbox` command.
+///
+/// Reads outbound user messages from the user-plane queue.
 pub fn run_inbox(
     runtime: &ToolRuntime,
     limit: usize,

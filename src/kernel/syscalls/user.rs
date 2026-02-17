@@ -1,3 +1,8 @@
+//! User communication syscall family.
+//!
+//! This plane is distinct from TFPv1 inter-agent transport: it models messages
+//! entering from and leaving to a human user via channel connectors.
+
 use rusqlite::params;
 use serde_json::Value;
 
@@ -5,104 +10,162 @@ use crate::kernel::context::ExecutionContext;
 use crate::kernel::errors::KernelError;
 use crate::tfpv1::storage::sqlite::open_connection;
 
+/// Request payload for `user.ingest`.
 #[derive(Debug, Clone)]
 pub struct UserIngestReq {
+    /// Source channel identifier (`matrix`, `email`, `webhook`, ...).
     pub channel: String,
+    /// Optional logical conversation thread.
     pub thread_id: Option<String>,
+    /// Message body as plain text.
     pub body: String,
+    /// Optional provider-side message id used for idempotency.
     pub external_message_id: Option<String>,
+    /// Optional structured metadata.
     pub metadata: Option<Value>,
 }
 
+/// Response payload for `user.ingest`.
 #[derive(Debug, Clone)]
 pub struct UserIngestResp {
+    /// Stored inbound message id.
     pub message_id: String,
+    /// Server receive timestamp (epoch milliseconds).
     pub received_at_ms: i64,
 }
 
+/// Request payload for `user.recv`.
 #[derive(Debug, Clone)]
 pub struct UserRecvReq {
+    /// Maximum number of messages to return.
     pub limit: usize,
+    /// Whether returned messages should be marked as acknowledged.
     pub consume: bool,
 }
 
+/// Inbound user message returned by `user.recv`.
 #[derive(Debug, Clone)]
 pub struct UserInboundMessage {
+    /// Stable message identifier.
     pub message_id: String,
+    /// Channel where the message came from.
     pub channel: String,
+    /// Optional thread identifier.
     pub thread_id: Option<String>,
+    /// Message body.
     pub body: String,
+    /// Optional metadata payload.
     pub metadata: Option<Value>,
+    /// Receive timestamp in epoch milliseconds.
     pub received_at_ms: i64,
 }
 
+/// Response payload for `user.recv`.
 #[derive(Debug, Clone)]
 pub struct UserRecvResp {
+    /// Retrieved messages.
     pub messages: Vec<UserInboundMessage>,
 }
 
+/// Request payload for `user.send`.
 #[derive(Debug, Clone)]
 pub struct UserSendReq {
+    /// Explicit channel override. If absent, routing resolution is used.
     pub channel: Option<String>,
+    /// Optional conversation thread identifier.
     pub thread_id: Option<String>,
+    /// Message body.
     pub body: String,
+    /// Optional metadata payload.
     pub metadata: Option<Value>,
 }
 
+/// Response payload for `user.send`.
 #[derive(Debug, Clone)]
 pub struct UserSendResp {
+    /// Outbound queue message id.
     pub message_id: String,
+    /// Selected destination channel.
     pub channel: String,
+    /// Queue insertion timestamp in epoch milliseconds.
     pub queued_at_ms: i64,
 }
 
+/// Request payload for `user.inbox`.
 #[derive(Debug, Clone)]
 pub struct UserInboxReq {
+    /// Maximum number of items to return.
     pub limit: usize,
+    /// Include already delivered entries.
     pub include_delivered: bool,
 }
 
+/// Outbound queue item visible through `user.inbox`.
 #[derive(Debug, Clone)]
 pub struct UserOutboundMessage {
+    /// Outbound message identifier.
     pub message_id: String,
+    /// Channel selected for delivery.
     pub channel: String,
+    /// Optional conversation thread identifier.
     pub thread_id: Option<String>,
+    /// Message body.
     pub body: String,
+    /// Optional metadata payload.
     pub metadata: Option<Value>,
+    /// Delivery status (`queued`, `sent`, `delivered`, `failed`).
     pub status: String,
+    /// Creation timestamp in epoch milliseconds.
     pub created_at_ms: i64,
+    /// Last status-update timestamp in epoch milliseconds.
     pub updated_at_ms: i64,
 }
 
+/// Response payload for `user.inbox`.
 #[derive(Debug, Clone)]
 pub struct UserInboxResp {
+    /// Returned outbound queue items.
     pub messages: Vec<UserOutboundMessage>,
 }
 
+/// Request payload for `user.route.resolve`.
 #[derive(Debug, Clone)]
 pub struct UserRouteResolveReq {
+    /// Optional thread whose latest inbound channel should be reused.
     pub thread_id: Option<String>,
+    /// Optional explicit preferred channel.
     pub preferred_channel: Option<String>,
 }
 
+/// Response payload for `user.route.resolve`.
 #[derive(Debug, Clone)]
 pub struct UserRouteResolveResp {
+    /// Chosen channel identifier.
     pub channel: String,
 }
 
+/// Provider trait for user communication syscalls.
+///
+/// Implementors must be `Send + Sync` because workers and request handlers can
+/// call them concurrently.
 pub trait UserCommsProvider: Send + Sync {
+    /// Ingests a user-originated message.
     fn ingest(
         &self,
         ctx: &ExecutionContext,
         req: UserIngestReq,
     ) -> Result<UserIngestResp, KernelError>;
+    /// Receives pending user messages for an agent.
     fn recv(&self, ctx: &ExecutionContext, req: UserRecvReq) -> Result<UserRecvResp, KernelError>;
+    /// Queues an outbound message to the user.
     fn send(&self, ctx: &ExecutionContext, req: UserSendReq) -> Result<UserSendResp, KernelError>;
+    /// Lists outbound user messages.
     fn inbox(
         &self,
         ctx: &ExecutionContext,
         req: UserInboxReq,
     ) -> Result<UserInboxResp, KernelError>;
+    /// Resolves the best channel for an outbound message.
     fn route_resolve(
         &self,
         ctx: &ExecutionContext,
@@ -110,12 +173,14 @@ pub trait UserCommsProvider: Send + Sync {
     ) -> Result<UserRouteResolveResp, KernelError>;
 }
 
+/// SQLite-backed implementation of [`UserCommsProvider`].
 #[derive(Debug, Clone)]
 pub struct SqliteUserCommsProvider {
     db_path: String,
 }
 
 impl SqliteUserCommsProvider {
+    /// Creates a provider that stores queue state in `db_path`.
     pub fn new(db_path: impl Into<String>) -> Self {
         Self {
             db_path: db_path.into(),

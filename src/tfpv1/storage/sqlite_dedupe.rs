@@ -1,3 +1,5 @@
+//! SQLite-backed deduplication cache for message ids.
+
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
@@ -6,18 +8,21 @@ use time::OffsetDateTime;
 
 use crate::tfpv1::storage::sqlite::open_connection;
 
+/// Dedupe store backed by SQLite.
 #[derive(Debug, Clone)]
 pub struct SqliteDedupe {
     db_path: String,
 }
 
 impl SqliteDedupe {
+    /// Creates a dedupe store bound to `db_path`.
     pub fn new(db_path: impl Into<String>) -> Self {
         Self {
             db_path: db_path.into(),
         }
     }
 
+    /// Inserts `message_id` if absent and not expired.
     pub fn check_and_insert(
         &mut self,
         message_id: &str,
@@ -57,6 +62,7 @@ impl SqliteDedupe {
         }
     }
 
+    /// Removes expired dedupe rows at current time.
     pub fn cleanup_expired_now(&mut self) -> Result<(), SqliteDedupeError> {
         let conn = open_connection(&self.db_path)
             .map_err(|e| SqliteDedupeError::Storage(e.to_string()))?;
@@ -69,6 +75,7 @@ impl SqliteDedupe {
         Ok(())
     }
 
+    /// Returns current dedupe table cardinality.
     pub fn len(&self) -> Result<usize, SqliteDedupeError> {
         let conn = open_connection(&self.db_path)
             .map_err(|e| SqliteDedupeError::Storage(e.to_string()))?;
@@ -81,14 +88,19 @@ impl SqliteDedupe {
     }
 }
 
+/// Result of a dedupe insertion attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DedupeResult {
+    /// Message id was inserted for the first time.
     Inserted,
+    /// Message id already existed.
     Duplicate,
 }
 
+/// Dedupe storage error.
 #[derive(Debug, Clone)]
 pub enum SqliteDedupeError {
+    /// Storage/backend failure.
     Storage(String),
 }
 
@@ -102,6 +114,7 @@ impl Display for SqliteDedupeError {
 
 impl Error for SqliteDedupeError {}
 
+/// Validates whether `message_ts` is inside the replay window.
 pub fn within_replay_window(
     message_ts: OffsetDateTime,
     now: OffsetDateTime,

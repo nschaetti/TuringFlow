@@ -1,3 +1,5 @@
+//! In-memory registry implementation used in tests and local flows.
+
 use std::collections::{HashMap, HashSet};
 
 use time::format_description::well_known::Rfc3339;
@@ -9,6 +11,7 @@ use crate::tfpv1::types::{
     ResolveResponse, TFPV1_VERSION,
 };
 
+/// Agent lookup projection.
 #[derive(Debug, Clone)]
 pub struct AgentLookup {
     pub kingdom_id: String,
@@ -19,6 +22,7 @@ pub struct AgentLookup {
     pub lease_expires_at: String,
 }
 
+/// In-memory registry state.
 #[derive(Debug, Default)]
 pub struct Registry {
     leases: HashMap<String, LeaseRecord>,
@@ -27,10 +31,12 @@ pub struct Registry {
 }
 
 impl Registry {
+    /// Creates an empty registry.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Registers agents and creates a lease.
     pub fn register(
         &mut self,
         request: RegisterRequest,
@@ -86,6 +92,7 @@ impl Registry {
         })
     }
 
+    /// Processes heartbeat and extends lease.
     pub fn heartbeat(
         &mut self,
         request: HeartbeatRequest,
@@ -148,6 +155,7 @@ impl Registry {
         })
     }
 
+    /// Resolves one route from `(kingdom_id, agent_ref)`.
     pub fn resolve(&mut self, kingdom_id: &str, agent_ref: &str) -> ResolveResponse {
         let now = OffsetDateTime::now_utc();
         self.cleanup_expired(now);
@@ -187,6 +195,7 @@ impl Registry {
         }
     }
 
+    /// Looks up a specific agent in one kingdom.
     pub fn lookup_agent(&mut self, kingdom_id: &str, agent_ref: &str) -> Option<AgentLookup> {
         let now = OffsetDateTime::now_utc();
         self.cleanup_expired(now);
@@ -207,6 +216,7 @@ impl Registry {
         })
     }
 
+    /// Looks up an agent across kingdoms.
     pub fn lookup_agent_any(&mut self, agent_ref: &str) -> Option<AgentLookup> {
         let now = OffsetDateTime::now_utc();
         self.cleanup_expired(now);
@@ -224,6 +234,7 @@ impl Registry {
         })
     }
 
+    /// Performs immediate expiry cleanup.
     pub fn cleanup_expired_now(&mut self) {
         self.cleanup_expired(OffsetDateTime::now_utc());
     }
@@ -283,10 +294,14 @@ struct AgentRecord {
     expires_at: OffsetDateTime,
 }
 
+/// In-memory registry operation errors.
 #[derive(Debug, Clone, Copy)]
 pub enum RegistryError {
+    /// Lease expired or unknown.
     LeaseExpired,
+    /// Heartbeat identity mismatch.
     IdentityMismatch,
+    /// Invalid request field.
     Invalid(&'static str),
 }
 

@@ -7,24 +7,35 @@ use reqwest::Method;
 use crate::kernel::context::ExecutionContext;
 use crate::kernel::errors::KernelError;
 
+/// Request payload for `net.http`.
 #[derive(Debug, Clone)]
 pub struct NetHttpReq {
+    /// HTTP method (for example `GET`, `POST`).
     pub method: String,
+    /// Absolute URL.
     pub url: String,
+    /// Optional raw body.
     pub body: Option<Vec<u8>>,
+    /// Optional request timeout in milliseconds.
     pub timeout_ms: Option<u64>,
 }
 
+/// Response payload for `net.http`.
 #[derive(Debug, Clone)]
 pub struct NetHttpResp {
+    /// Numeric HTTP status code.
     pub status: u16,
+    /// Raw response body bytes.
     pub body: Vec<u8>,
 }
 
+/// Network syscall provider.
 pub trait NetworkProvider: Send + Sync {
+    /// Executes an HTTP request.
     fn http(&self, _ctx: &ExecutionContext, _req: NetHttpReq) -> Result<NetHttpResp, KernelError>;
 }
 
+/// Host-backed HTTP provider with explicit method/host allowlists.
 #[derive(Debug, Clone)]
 pub struct HostNetworkProvider {
     client: Client,
@@ -35,6 +46,12 @@ pub struct HostNetworkProvider {
 }
 
 impl HostNetworkProvider {
+    /// Builds a provider constrained by allowed hosts/methods.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError`] when the allowlists are empty, timeout bounds are
+    /// invalid, or the underlying HTTP client cannot be built.
     pub fn new(
         allowed_hosts: HashSet<String>,
         allowed_methods: HashSet<String>,

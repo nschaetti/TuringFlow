@@ -1,3 +1,5 @@
+//! Canonical TFPv1 wire types and validators.
+
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
@@ -8,18 +10,26 @@ use time::OffsetDateTime;
 
 use crate::tfpv1::agent_ref::AgentRef;
 
+/// Protocol version literal expected by all TFPv1 payloads.
 pub const TFPV1_VERSION: &str = "TFPv1";
 
+/// Agent registration request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterRequest {
+    /// Protocol version.
     pub version: String,
+    /// Kingdom where agents are registered.
     pub kingdom_id: String,
+    /// Registering node metadata.
     pub node: NodeRegistration,
+    /// Agents announced by this node.
     pub agents: Vec<AgentRegistration>,
+    /// Requested lease TTL.
     pub lease_ttl_ms: u64,
 }
 
 impl RegisterRequest {
+    /// Validates request shape and required fields.
     pub fn validate(&self) -> Result<(), ValidationError> {
         validate_version(&self.version)?;
         validate_non_empty("kingdom_id", &self.kingdom_id)?;
@@ -43,6 +53,7 @@ impl RegisterRequest {
     }
 }
 
+/// Agent registration response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterResponse {
     pub version: String,
@@ -51,6 +62,7 @@ pub struct RegisterResponse {
     pub accepted: Vec<String>,
 }
 
+/// Registering node metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeRegistration {
     pub node_id: String,
@@ -59,6 +71,7 @@ pub struct NodeRegistration {
 }
 
 impl NodeRegistration {
+    /// Validates node registration fields.
     pub fn validate(&self) -> Result<(), ValidationError> {
         validate_non_empty("node.node_id", &self.node_id)?;
 
@@ -77,6 +90,7 @@ impl NodeRegistration {
     }
 }
 
+/// Agent registration entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentRegistration {
     pub agent_ref: String,
@@ -84,6 +98,7 @@ pub struct AgentRegistration {
 }
 
 impl AgentRegistration {
+    /// Validates one agent registration entry.
     pub fn validate(&self) -> Result<(), ValidationError> {
         AgentRef::parse(&self.agent_ref)
             .map_err(|_| ValidationError::new("agents[].agent_ref", "invalid agent_ref"))?;
@@ -92,6 +107,7 @@ impl AgentRegistration {
     }
 }
 
+/// Lease heartbeat request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeartbeatRequest {
     pub version: String,
@@ -102,6 +118,7 @@ pub struct HeartbeatRequest {
 }
 
 impl HeartbeatRequest {
+    /// Validates heartbeat payload.
     pub fn validate(&self) -> Result<(), ValidationError> {
         validate_version(&self.version)?;
         validate_non_empty("lease_id", &self.lease_id)?;
@@ -119,6 +136,7 @@ impl HeartbeatRequest {
     }
 }
 
+/// Lease heartbeat response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeartbeatResponse {
     pub version: String,
@@ -126,6 +144,7 @@ pub struct HeartbeatResponse {
     pub expires_at: String,
 }
 
+/// Agent resolution response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolveResponse {
     pub version: String,
@@ -138,12 +157,14 @@ pub struct ResolveResponse {
     pub lease_expires_at: Option<String>,
 }
 
+/// Resolved delivery route for an agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentRoute {
     pub node_id: String,
     pub deliver_url: String,
 }
 
+/// Message send request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendRequest {
     pub version: String,
@@ -152,6 +173,7 @@ pub struct SendRequest {
 }
 
 impl SendRequest {
+    /// Validates send request payload.
     pub fn validate(&self) -> Result<(), ValidationError> {
         validate_version(&self.version)?;
         validate_non_empty("kingdom_id", &self.kingdom_id)?;
@@ -159,6 +181,7 @@ impl SendRequest {
     }
 }
 
+/// Message send response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendResponse {
     pub version: String,
@@ -168,6 +191,7 @@ pub struct SendResponse {
     pub destination: String,
 }
 
+/// Delivery acknowledgement request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AckRequest {
     pub version: String,
@@ -180,6 +204,7 @@ pub struct AckRequest {
 }
 
 impl AckRequest {
+    /// Validates ACK payload.
     pub fn validate(&self) -> Result<(), ValidationError> {
         validate_version(&self.version)?;
         validate_non_empty("delivery_id", &self.delivery_id)?;
@@ -191,12 +216,14 @@ impl AckRequest {
     }
 }
 
+/// Delivery acknowledgement response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AckResponse {
     pub version: String,
     pub accepted: bool,
 }
 
+/// Routed message envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Envelope {
     pub version: String,
@@ -214,6 +241,7 @@ pub struct Envelope {
 }
 
 impl Envelope {
+    /// Validates envelope invariants.
     pub fn validate(&self) -> Result<(), ValidationError> {
         validate_version(&self.version)?;
         validate_non_empty("message_id", &self.message_id)?;
@@ -239,6 +267,7 @@ impl Envelope {
     }
 }
 
+/// Envelope semantic kind.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MessageKind {
@@ -248,6 +277,7 @@ pub enum MessageKind {
     Error,
 }
 
+/// Routing metadata attached to an envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Routing {
     pub hops_max: u16,
@@ -269,6 +299,7 @@ impl Routing {
     }
 }
 
+/// One hop in routing path.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouteHop {
     pub node: String,
@@ -283,6 +314,7 @@ impl RouteHop {
     }
 }
 
+/// Message payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Payload {
     pub content_type: String,
@@ -296,6 +328,7 @@ impl Payload {
     }
 }
 
+/// Optional envelope metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Meta {
     pub priority: Priority,
@@ -315,6 +348,7 @@ impl Meta {
     }
 }
 
+/// Message priority hint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Priority {
@@ -323,6 +357,7 @@ pub enum Priority {
     High,
 }
 
+/// Acknowledgement status.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AckStatus {
@@ -331,6 +366,7 @@ pub enum AckStatus {
     Failed,
 }
 
+/// Validation error returned by type validators.
 #[derive(Debug, Clone)]
 pub struct ValidationError {
     field: &'static str,
@@ -342,10 +378,12 @@ impl ValidationError {
         Self { field, message }
     }
 
+    /// Returns the field path associated with this error.
     pub fn field(&self) -> &'static str {
         self.field
     }
 
+    /// Returns a static validation message.
     pub fn message(&self) -> &'static str {
         self.message
     }
@@ -359,6 +397,7 @@ impl Display for ValidationError {
 
 impl Error for ValidationError {}
 
+/// Validates protocol version field.
 pub fn validate_version(version: &str) -> Result<(), ValidationError> {
     if version == TFPV1_VERSION {
         Ok(())
@@ -367,12 +406,14 @@ pub fn validate_version(version: &str) -> Result<(), ValidationError> {
     }
 }
 
+/// Validates RFC3339 timestamp fields.
 pub fn validate_rfc3339(field: &'static str, input: &str) -> Result<(), ValidationError> {
     OffsetDateTime::parse(input, &Rfc3339)
         .map(|_| ())
         .map_err(|_| ValidationError::new(field, "must be a valid RFC3339 timestamp"))
 }
 
+/// Validates non-empty string fields.
 pub fn validate_non_empty(field: &'static str, input: &str) -> Result<(), ValidationError> {
     if input.trim().is_empty() {
         Err(ValidationError::new(field, "must not be empty"))

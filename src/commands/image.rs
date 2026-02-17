@@ -9,6 +9,10 @@ use turingflow::rchain::chat_models::ChatFireworks;
 use turingflow::rchain::human::HumanMessage;
 use turingflow::rchain::tools::encode_image_base64_from_bytes;
 
+/// Executes the image command.
+///
+/// Reads config and image bytes through the kernel runtime, sends a multimodal
+/// prompt to the configured model, and prints validated JSON output.
 pub fn run_image(
     runtime: &ToolRuntime,
     image_path: impl AsRef<Path>,

@@ -6,6 +6,7 @@ use base64::Engine;
 use image::ImageOutputFormat;
 use serde_json::{json, Map, Value};
 
+/// JSON schema primitive types supported for tool parameters.
 #[derive(Debug, Clone)]
 pub enum ToolParamType {
     Integer,
@@ -29,15 +30,21 @@ impl ToolParamType {
     }
 }
 
+/// One function parameter definition.
 #[derive(Debug, Clone)]
 pub struct ToolParam {
+    /// Parameter name.
     pub name: String,
+    /// Optional human-readable description.
     pub description: Option<String>,
+    /// JSON schema type.
     pub kind: ToolParamType,
+    /// Whether the parameter is required.
     pub required: bool,
 }
 
 impl ToolParam {
+    /// Builds a parameter definition.
     pub fn new(
         name: impl Into<String>,
         kind: ToolParamType,
@@ -53,14 +60,19 @@ impl ToolParam {
     }
 }
 
+/// Callable tool function definition.
 #[derive(Debug, Clone)]
 pub struct ToolFunction {
+    /// Function name.
     pub name: String,
+    /// Function description.
     pub description: String,
+    /// Parameter definitions.
     pub params: Vec<ToolParam>,
 }
 
 impl ToolFunction {
+    /// Creates a function definition.
     pub fn new(name: impl Into<String>, description: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -69,6 +81,7 @@ impl ToolFunction {
         }
     }
 
+    /// Appends one parameter definition.
     pub fn with_param(mut self, param: ToolParam) -> Self {
         self.params.push(param);
         self
@@ -106,16 +119,20 @@ impl ToolFunction {
     }
 }
 
+/// Tool wrapper matching chat-completions function-calling schema.
 #[derive(Debug, Clone)]
 pub struct ToolDefinition {
+    /// Function declaration.
     pub function: ToolFunction,
 }
 
 impl ToolDefinition {
+    /// Wraps a function definition as a tool.
     pub fn from_function(function: ToolFunction) -> Self {
         Self { function }
     }
 
+    /// Serializes the tool declaration to JSON.
     pub fn to_json(&self) -> Value {
         json!({
             "type": "function",
@@ -128,10 +145,14 @@ impl ToolDefinition {
     }
 }
 
+/// Tool call emitted by a model.
 #[derive(Debug, Clone)]
 pub struct ToolCall {
+    /// Provider-generated call id.
     pub id: String,
+    /// Tool/function name.
     pub name: String,
+    /// Arguments payload.
     pub args: Value,
 }
 
@@ -143,6 +164,7 @@ impl ToolCall {
         }
     }
 
+    /// Serializes a tool call payload to provider JSON format.
     pub fn to_json(&self) -> Value {
         json!({
             "id": self.id,
@@ -155,6 +177,7 @@ impl ToolCall {
     }
 }
 
+/// Normalizes arbitrary image bytes to PNG and returns Base64 payload.
 pub fn encode_image_base64_from_bytes(bytes: &[u8]) -> Result<String, Box<dyn Error>> {
     let image = image::load_from_memory(bytes)?;
     let mut buffer = Vec::new();

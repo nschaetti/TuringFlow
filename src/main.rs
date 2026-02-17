@@ -46,6 +46,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         } => {
             commands::inbox::run_inbox(&runtime, limit, include_delivered)?;
         }
+        Commands::DebugUser {
+            limit,
+            include_acked,
+            include_delivered,
+        } => {
+            commands::debug_user::run_debug_user(
+                &runtime,
+                limit,
+                include_acked,
+                include_delivered,
+            )?;
+        }
     }
 
     Ok(())

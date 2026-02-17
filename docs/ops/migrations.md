@@ -11,6 +11,7 @@
 - `0001_tfpv1_core`
 - `0002_kernel_policy_audit`
 - `0003_user_comms`
+- `0004_user_channel_offsets`
 
 ## Safety notes
 

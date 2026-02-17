@@ -12,6 +12,7 @@ cargo run --bin turingflowd -- --config config/turingflowd.yaml --kingdoms-confi
 
 - `--config` path to daemon config (`config/turingflowd.yaml` by default)
 - `--kingdoms-config` path to kingdoms quotas/allowlist (`config/kingdoms.yaml` by default)
+- `--channels-config` path to user channels config (`config/channels.yaml` by default)
 
 ## Main API endpoints
 
@@ -21,6 +22,7 @@ cargo run --bin turingflowd -- --config config/turingflowd.yaml --kingdoms-confi
 - `GET /tfpv1/agents/resolve/{agent_ref}?kingdom_id=...`
 - `POST /tfpv1/messages/send`
 - `POST /tfpv1/messages/ack`
+- `GET /tfpv1/debug/user-queues?limit=50&include_acked=false&include_delivered=false`
 
 ## Security behavior
 
@@ -49,3 +51,12 @@ Supported operation keys:
 - `user.route.resolve`
 
 Unauthorized operations return structured errors (for example `EACCES`).
+
+## Matrix worker
+
+When `channels.matrix.enabled` is true and its token environment variable is available,
+`turingflowd` starts a background worker that:
+
+- ingests Matrix room messages into `user_inbound`
+- delivers queued `user_outbound` messages to Matrix
+- updates outbound status (`delivered` or `failed`)

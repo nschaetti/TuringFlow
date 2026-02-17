@@ -8,6 +8,7 @@ use crate::rchain::ai::AIMessage;
 use crate::rchain::human::HumanMessage;
 use crate::rchain::tools::{ToolCall, ToolDefinition};
 
+/// Fireworks chat-completions client.
 #[derive(Debug, Clone)]
 pub struct ChatFireworks {
     model: String,
@@ -19,6 +20,7 @@ pub struct ChatFireworks {
 }
 
 impl ChatFireworks {
+    /// Creates a new client from model id and `FIREWORKS_API_KEY` env var.
     pub fn new(model: impl Into<String>, temperature: f64) -> Result<Self, Box<dyn Error>> {
         let api_key = env::var("FIREWORKS_API_KEY")
             .map_err(|_| "FIREWORKS_API_KEY is not set in the environment")?;
@@ -32,12 +34,14 @@ impl ChatFireworks {
         })
     }
 
+    /// Returns a cloned client bound to tool definitions.
     pub fn bind_tools(&self, tools: Vec<ToolDefinition>) -> Self {
         let mut bound = self.clone();
         bound.tools = Some(tools);
         bound
     }
 
+    /// Invokes the model with user messages only.
     pub fn invoke(&self, messages: &[HumanMessage]) -> Result<AIMessage, Box<dyn Error>> {
         let chat_messages = messages
             .iter()
@@ -46,6 +50,7 @@ impl ChatFireworks {
         self.invoke_messages(&chat_messages)
     }
 
+    /// Invokes the model with fully-typed role messages.
     pub fn invoke_messages(&self, messages: &[ChatMessage]) -> Result<AIMessage, Box<dyn Error>> {
         let mut payload = Map::new();
         payload.insert("model".to_string(), Value::String(self.model.clone()));
@@ -87,13 +92,18 @@ impl ChatFireworks {
     }
 }
 
+/// Supported role values in chat requests.
 #[derive(Debug, Clone)]
 pub enum MessageRole {
+    /// Human/user role.
     User,
+    /// Assistant role.
     Assistant,
+    /// Tool result role.
     Tool,
 }
 
+/// Chat message wrapper used by [`ChatFireworks`].
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
     role: MessageRole,
@@ -103,6 +113,7 @@ pub struct ChatMessage {
 }
 
 impl ChatMessage {
+    /// Builds a user message from [`HumanMessage`].
     pub fn user(message: HumanMessage) -> Self {
         Self {
             role: MessageRole::User,
@@ -112,6 +123,7 @@ impl ChatMessage {
         }
     }
 
+    /// Builds a plain-text user message.
     pub fn user_text(content: impl Into<String>) -> Self {
         Self {
             role: MessageRole::User,
@@ -121,6 +133,7 @@ impl ChatMessage {
         }
     }
 
+    /// Builds a multipart user message.
     pub fn user_parts(parts: Vec<Value>) -> Self {
         Self {
             role: MessageRole::User,
@@ -130,6 +143,7 @@ impl ChatMessage {
         }
     }
 
+    /// Builds an assistant message from an [`AIMessage`].
     pub fn assistant_from_ai(message: &AIMessage) -> Self {
         let content = if message.content.is_empty() {
             Value::Null
@@ -148,6 +162,7 @@ impl ChatMessage {
         }
     }
 
+    /// Builds a tool-result message associated with a tool call id.
     pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             role: MessageRole::Tool,
@@ -157,6 +172,7 @@ impl ChatMessage {
         }
     }
 
+    /// Serializes this chat message to provider JSON format.
     pub fn to_json(&self) -> Value {
         let mut map = Map::new();
         map.insert(

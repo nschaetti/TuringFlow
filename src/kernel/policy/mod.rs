@@ -1,3 +1,8 @@
+//! Policy configuration and evaluation engine.
+//!
+//! Evaluation is deny-by-default and resolves principals in this order:
+//! `agent_tool:<agent_ref>:<tool_id>` then `agent:<agent_ref>`.
+
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs;
@@ -9,15 +14,20 @@ use serde_json::Value;
 
 use crate::kernel::context::ExecutionContext;
 
+/// Root policy configuration loaded from YAML.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PolicyConfig {
+    /// Schema version (must be `1`).
     pub version: u32,
+    /// Default decision policy.
     pub defaults: PolicyDefaults,
+    /// Principal-specific rules.
     #[serde(default)]
     pub principals: Vec<PrincipalPolicy>,
 }
 
 impl PolicyConfig {
+    /// Loads and validates a policy file.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
         let raw = fs::read_to_string(path)?;
         let config: Self = serde_yaml::from_str(&raw)?;
@@ -25,6 +35,7 @@ impl PolicyConfig {
         Ok(config)
     }
 
+    /// Validates schema and rule invariants.
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.version != 1 {
             return Err("policy version must be 1".into());
@@ -70,11 +81,14 @@ impl PolicyConfig {
     }
 }
 
+/// Default policy behavior.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PolicyDefaults {
+    /// Default decision for unmatched requests.
     pub decision: Decision,
 }
 
+/// Allow/deny effect.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Decision {
@@ -82,36 +96,52 @@ pub enum Decision {
     Deny,
 }
 
+/// Rules attached to a principal.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PrincipalPolicy {
+    /// Principal id (`agent:*` or `agent_tool:*`).
     pub id: String,
+    /// Ordered rules (sorted by priority during engine construction).
     #[serde(default)]
     pub rules: Vec<PolicyRule>,
 }
 
+/// Individual policy rule.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PolicyRule {
+    /// Rule identifier, unique within principal.
     pub id: String,
+    /// Rule effect.
     pub effect: Decision,
+    /// Syscall name matched by this rule.
     pub syscall: String,
+    /// Optional resource matcher.
     pub resource: Option<Value>,
+    /// Optional future constraints payload.
     pub constraints: Option<Value>,
+    /// Rule priority (higher first).
     pub priority: Option<i64>,
 }
 
+/// Result of one policy evaluation.
 #[derive(Debug, Clone)]
 pub struct DecisionResult {
+    /// Whether access is granted.
     pub allowed: bool,
+    /// Matching rule id, when any.
     pub rule_id: Option<String>,
+    /// Principal that matched, when any.
     pub principal_id: Option<String>,
 }
 
+/// In-memory policy evaluator.
 #[derive(Debug, Clone)]
 pub struct PolicyEngine {
     by_principal: HashMap<String, Vec<PolicyRule>>,
 }
 
 impl PolicyEngine {
+    /// Builds an evaluator and pre-sorts rules by descending priority.
     pub fn new(config: PolicyConfig) -> Self {
         let mut by_principal = HashMap::new();
 
@@ -124,10 +154,12 @@ impl PolicyEngine {
         Self { by_principal }
     }
 
+    /// Evaluates a syscall without resource attributes.
     pub fn evaluate(&self, ctx: &ExecutionContext, syscall: &str) -> DecisionResult {
         self.evaluate_with_resource(ctx, syscall, None)
     }
 
+    /// Evaluates a syscall with optional resource attributes.
     pub fn evaluate_with_resource(
         &self,
         ctx: &ExecutionContext,

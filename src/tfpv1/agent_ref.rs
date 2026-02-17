@@ -1,6 +1,9 @@
+//! Agent reference parsing and validation.
+
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+/// Parsed agent reference.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AgentRef {
     local: String,
@@ -8,6 +11,7 @@ pub struct AgentRef {
 }
 
 impl AgentRef {
+    /// Parses and normalizes `local@hostname` references.
     pub fn parse(input: &str) -> Result<Self, AgentRefError> {
         let (local, hostname) = input
             .split_once('@')
@@ -35,18 +39,22 @@ impl AgentRef {
         })
     }
 
+    /// Returns the local-part (`name` or `id`).
     pub fn local(&self) -> &str {
         &self.local
     }
 
+    /// Returns normalized lowercase hostname.
     pub fn hostname(&self) -> &str {
         &self.hostname
     }
 
+    /// Returns canonical `local@hostname` rendering.
     pub fn normalized(&self) -> String {
         format!("{}@{}", self.local, self.hostname)
     }
 
+    /// Validates a hostname according to parser rules.
     pub fn validate_hostname(hostname: &str) -> bool {
         is_valid_hostname(&normalize_hostname(hostname))
     }
@@ -58,10 +66,14 @@ impl Display for AgentRef {
     }
 }
 
+/// Agent reference parse errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentRefError {
+    /// Missing `@` separator.
     MissingSeparator,
+    /// Invalid local-part.
     InvalidLocalPart,
+    /// Invalid hostname.
     InvalidHostname,
 }
 

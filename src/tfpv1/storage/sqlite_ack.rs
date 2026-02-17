@@ -1,3 +1,5 @@
+//! SQLite ACK persistence.
+
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
@@ -9,24 +11,28 @@ use time::OffsetDateTime;
 use crate::tfpv1::storage::sqlite::open_connection;
 use crate::tfpv1::types::{AckRequest, AckStatus};
 
+/// ACK store backed by SQLite.
 #[derive(Debug, Clone)]
 pub struct SqliteAckStore {
     db_path: String,
 }
 
 impl SqliteAckStore {
+    /// Creates a store bound to a database file.
     pub fn new(db_path: impl Into<String>) -> Self {
         Self {
             db_path: db_path.into(),
         }
     }
 
+    /// Creates a store using an in-memory SQLite database.
     pub fn in_memory() -> Self {
         Self {
             db_path: ":memory:".to_string(),
         }
     }
 
+    /// Inserts or updates an ACK record.
     pub fn record_ack(&self, ack: &AckRequest) -> Result<(), SqliteAckStoreError> {
         let conn = open_connection(&self.db_path)
             .map_err(|e| SqliteAckStoreError::Storage(e.to_string()))?;
@@ -63,8 +69,10 @@ impl SqliteAckStore {
     }
 }
 
+/// ACK store error.
 #[derive(Debug, Clone)]
 pub enum SqliteAckStoreError {
+    /// Storage/backend failure.
     Storage(String),
 }
 

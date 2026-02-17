@@ -1,3 +1,5 @@
+//! mTLS helpers for the daemon.
+
 use std::error::Error;
 use std::fs;
 use std::sync::Arc;
@@ -9,6 +11,7 @@ use rustls_pemfile::Item;
 use x509_parser::extensions::GeneralName;
 use x509_parser::prelude::{FromDer, X509Certificate};
 
+/// Builds rustls server config with mandatory client certificate verification.
 pub fn build_server_config(
     server_cert_path: &str,
     server_key_path: &str,
@@ -59,6 +62,9 @@ pub fn build_server_config(
     Ok(Arc::new(config))
 }
 
+/// Extracts normalized node identity from client certificate.
+///
+/// The function prefers SAN DNS names and falls back to subject CN.
 pub fn extract_node_id_from_cert(cert_der: &[u8]) -> Option<String> {
     let (_, cert) = X509Certificate::from_der(cert_der).ok()?;
 

@@ -1,3 +1,5 @@
+//! Standardized TFPv1 HTTP error payload builders.
+
 use axum::http::StatusCode;
 use axum::Json;
 use serde::Serialize;
@@ -5,21 +7,30 @@ use serde_json::Value;
 
 use crate::tfpv1::types::TFPV1_VERSION;
 
+/// Embedded error body.
 #[derive(Debug, Serialize)]
 pub struct ErrorBody {
+    /// Stable machine-readable code.
     pub code: &'static str,
+    /// Human-readable description.
     pub message: String,
+    /// Whether clients may retry safely.
     pub retryable: bool,
+    /// Optional structured details.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
 }
 
+/// Top-level error response envelope.
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
+    /// Protocol version.
     pub version: &'static str,
+    /// Embedded error.
     pub error: ErrorBody,
 }
 
+/// Builds a standard error response without details.
 pub fn response(
     status: StatusCode,
     code: &'static str,
@@ -40,6 +51,7 @@ pub fn response(
     )
 }
 
+/// Builds a standard error response with structured details.
 pub fn response_with_details(
     status: StatusCode,
     code: &'static str,

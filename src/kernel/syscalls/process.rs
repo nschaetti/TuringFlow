@@ -4,30 +4,43 @@ use std::process::Command;
 use crate::kernel::context::ExecutionContext;
 use crate::kernel::errors::KernelError;
 
+/// Request payload for `proc.exec`.
 #[derive(Debug, Clone)]
 pub struct ProcExecReq {
+    /// Binary name (not a path).
     pub command: String,
+    /// Command-line arguments.
     pub args: Vec<String>,
 }
 
+/// Response payload for `proc.exec`.
 #[derive(Debug, Clone)]
 pub struct ProcExecResp {
+    /// Process exit code (`-1` when unavailable).
     pub exit_code: i32,
+    /// Captured stdout bytes.
     pub stdout: Vec<u8>,
+    /// Captured stderr bytes.
     pub stderr: Vec<u8>,
 }
 
+/// Process syscall provider.
 pub trait ProcessProvider: Send + Sync {
+    /// Executes a command.
     fn exec(&self, _ctx: &ExecutionContext, _req: ProcExecReq)
         -> Result<ProcExecResp, KernelError>;
 }
 
+/// Allowlist entry for one executable.
 #[derive(Debug, Clone)]
 pub struct AllowedCommand {
+    /// Binary name (`cargo`, `echo`, ...).
     pub binary: String,
+    /// Optional explicit argument allowlist.
     pub allowed_args: Option<HashSet<String>>,
 }
 
+/// Host-backed process provider with strict command/arg validation.
 #[derive(Debug, Clone)]
 pub struct HostProcessProvider {
     allowed: HashMap<String, Option<HashSet<String>>>,
@@ -36,6 +49,12 @@ pub struct HostProcessProvider {
 }
 
 impl HostProcessProvider {
+    /// Creates a provider from an executable allowlist.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError`] when the allowlist is empty or contains invalid
+    /// / shell binaries.
     pub fn new(allowed_commands: Vec<AllowedCommand>) -> Result<Self, KernelError> {
         if allowed_commands.is_empty() {
             return Err(KernelError::invalid(
