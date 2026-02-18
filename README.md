@@ -1,5 +1,7 @@
 # TuringFlow
 
+![TuringFlow banner](images/turingflow_banner.png)
+
 [![Rust CI](https://github.com/nschaetti/TuringFlow/actions/workflows/rust.yml/badge.svg)](https://github.com/nschaetti/TuringFlow/actions/workflows/rust.yml)
 [![codecov](https://codecov.io/gh/nschaetti/TuringFlow/branch/main/graph/badge.svg)](https://codecov.io/gh/nschaetti/TuringFlow)
 
