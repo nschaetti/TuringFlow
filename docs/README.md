@@ -20,6 +20,7 @@ This directory is split by audience.
 - `docs/dev/architecture.md`
 - `docs/dev/kernel.md`
 - `docs/dev/tfpv1-api.md`
+- `docs/dev/logging.md`
 - `docs/dev/storage.md`
 - `docs/dev/testing.md`
 - `docs/dev/contributing.md`

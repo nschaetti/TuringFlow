@@ -338,6 +338,8 @@ mod tests {
     fn context() -> ExecutionContext {
         ExecutionContext {
             trace_id: "trc_fs_1".to_string(),
+            span_id: None,
+            parent_span_id: None,
             kingdom_id: "kingdom-main".to_string(),
             agent_ref: "planner@node-a.local".to_string(),
             tool_id: Some("fs".to_string()),

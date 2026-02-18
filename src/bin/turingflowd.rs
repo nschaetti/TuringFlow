@@ -12,7 +12,7 @@ use clap::Parser;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder as HyperBuilder;
 use hyper_util::service::TowerToHyperService;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::{Duration as TimeDuration, OffsetDateTime};
@@ -20,7 +20,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
 use tokio_rustls::TlsAcceptor;
-use tracing::{info, warn};
 use turingflow::kernel::context::ExecutionContext;
 use turingflow::kernel::errors::{KernelError, KernelErrorCode};
 use turingflow::kernel::policy::{PolicyConfig, PolicyEngine};
@@ -32,6 +31,7 @@ use turingflow::kernel::syscalls::user::{
     UserSendReq,
 };
 use turingflow::kernel::Kernel;
+use turingflow::observability::logging::{EventType, LogLevel, Logger, LoggerConfig, TraceContext};
 use turingflow::tfpv1::agent_ref::AgentRef;
 use turingflow::tfpv1::errors;
 use turingflow::tfpv1::mtls::{build_server_config, extract_node_id_from_cert};
@@ -45,7 +45,8 @@ use turingflow::tfpv1::storage::sqlite_registry::{RegistryError, SqliteRegistry}
 use turingflow::tfpv1::storage::sqlite_user_comms::{list_user_inbound, list_user_outbound};
 use turingflow::tfpv1::system_config::{DaemonConfig, KingdomQuotas, KingdomsConfig};
 use turingflow::tfpv1::types::{
-    AckRequest, HeartbeatRequest, Meta, RegisterRequest, SendRequest, SendResponse, TFPV1_VERSION,
+    AckRequest, HeartbeatRequest, Meta, RegisterRequest, SendRequest, SendResponse, TraceMetadata,
+    TFPV1_VERSION,
 };
 use turingflow::user_channels::config::ChannelsConfig;
 use turingflow::user_channels::matrix::spawn_matrix_worker;
@@ -61,6 +62,7 @@ struct AppState {
     max_message_ttl_ms: u64,
     kingdoms: Arc<KingdomsConfig>,
     metrics: Arc<Metrics>,
+    logger: Arc<Logger>,
 }
 
 #[derive(Debug, Default)]
@@ -101,10 +103,34 @@ struct ResolveQuery {
 }
 
 #[derive(Debug, Deserialize)]
+/// Query params for debug queue endpoint.
 struct DebugUserQuery {
     limit: Option<usize>,
     include_acked: Option<bool>,
     include_delivered: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+/// Runtime logging level mutation request.
+///
+/// Supported scopes:
+/// - `global`
+/// - `agent` (requires `key` = agent id)
+/// - `trace` (requires `key` = trace id)
+struct LoggingLevelUpdateRequest {
+    scope: String,
+    key: Option<String>,
+    level: Option<String>,
+    ttl_ms: Option<u64>,
+    clear: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+/// Response returned by runtime level mutation endpoint.
+struct LoggingLevelUpdateResponse {
+    ok: bool,
+    message: String,
+    levels: Value,
 }
 
 #[derive(Debug, Parser)]
@@ -130,13 +156,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let sqlite_path = daemon_config.storage.sqlite.path.clone();
     initialize_database(&sqlite_path)?;
 
-    let max_level = daemon_config.logging.level();
-    let log_builder = tracing_subscriber::fmt().with_max_level(max_level);
-    if daemon_config.logging.format == "json" {
-        log_builder.json().init();
-    } else {
-        log_builder.init();
-    }
+    let logger = Logger::new(LoggerConfig {
+        service: "turingflowd".to_string(),
+        node_id: daemon_config.server.node_id.clone(),
+        min_level: daemon_config.logging.level(),
+        console_table: true,
+        file_path: daemon_config.logging.file_path.clone(),
+        queue_capacity: daemon_config.logging.queue_capacity,
+        sampling: daemon_config.logging.sampling.clone(),
+        rotation: daemon_config.logging.rotation.clone(),
+        metrics_hook: None,
+    })?;
 
     let addr: SocketAddr = daemon_config.listen_addr()?;
 
@@ -170,6 +200,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         max_message_ttl_ms: daemon_config.limits.max_message_ttl_ms,
         kingdoms: Arc::new(kingdoms_config),
         metrics: Arc::new(Metrics::default()),
+        logger: logger.clone(),
     };
 
     if channels_config.channels.matrix.enabled {
@@ -185,12 +216,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
             sleep(Duration::from_secs(5)).await;
             let mut registry = gc_state.registry.write().await;
             if let Err(error) = registry.cleanup_expired_now() {
-                warn!(error = ?error, "registry_cleanup_failed");
+                gc_state.logger.log(
+                    LogLevel::Warn,
+                    EventType::Performance,
+                    "registry_cleanup_failed",
+                    None,
+                    None,
+                    json!({"error": format!("{error:?}")}),
+                    None,
+                );
             }
             drop(registry);
             let mut dedupe = gc_state.dedupe.write().await;
             if let Err(error) = dedupe.cleanup_expired_now() {
-                warn!(error = ?error, "dedupe_cleanup_failed");
+                gc_state.logger.log(
+                    LogLevel::Warn,
+                    EventType::Performance,
+                    "dedupe_cleanup_failed",
+                    None,
+                    None,
+                    json!({"error": error.to_string()}),
+                    None,
+                );
             }
         }
     });
@@ -205,21 +252,40 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .route("/agents/resolve/{agent_ref}", get(resolve_agent))
                 .route("/messages/send", post(send_message))
                 .route("/messages/ack", post(ack_message))
-                .route("/debug/user-queues", get(debug_user_queues)),
+                .route("/debug/user-queues", get(debug_user_queues))
+                .route("/debug/logging-levels", get(debug_logging_levels))
+                .route("/debug/logging-levels", post(update_logging_levels)),
         )
         .with_state(state);
 
     let listener = TcpListener::bind(addr).await?;
-    info!(listen = %addr, "turingflowd_listening");
+    logger.log(
+        LogLevel::Info,
+        EventType::System,
+        "turingflowd_listening",
+        None,
+        None,
+        json!({"listen": addr.to_string()}),
+        None,
+    );
 
     loop {
         let (tcp_stream, _remote_addr) = listener.accept().await?;
         let tls_acceptor = tls_acceptor.clone();
         let app = app.clone();
+        let logger = logger.clone();
 
         tokio::spawn(async move {
             if let Err(error) = handle_connection(tls_acceptor, tcp_stream, app).await {
-                warn!(error = %error, "connection_error");
+                logger.log(
+                    LogLevel::Warn,
+                    EventType::Network,
+                    "connection_error",
+                    None,
+                    None,
+                    json!({"error": error.to_string()}),
+                    None,
+                );
             }
         });
     }
@@ -259,7 +325,11 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         "version": "TFPv1",
         "service": "turingflowd",
         "status": "ok",
-        "metrics": state.metrics.snapshot()
+        "metrics": state.metrics.snapshot(),
+        "observability": {
+            "logs_dropped": state.logger.dropped_logs(),
+            "log_queue_depth": state.logger.queue_depth()
+        }
     }))
 }
 
@@ -433,7 +503,7 @@ async fn send_message(
         return payload_too_large(state.max_payload_bytes);
     }
 
-    let request: SendRequest = match serde_json::from_value(payload) {
+    let mut request: SendRequest = match serde_json::from_value(payload) {
         Ok(request) => request,
         Err(error) => return invalid_payload(format!("invalid send request JSON: {error}")),
     };
@@ -491,17 +561,24 @@ async fn send_message(
         }
     };
 
+    let trace_ctx = ensure_message_trace(&mut request.message);
     let message_id = request.message.message_id.clone();
-    let trace_id = request.message.trace_id.clone();
+    let trace_id = trace_ctx.trace_id.clone();
     let from_ref = request.message.from_ref.clone();
     let to_ref = request.message.to_ref.clone();
-
-    info!(
-        message_id = %message_id,
-        trace_id = %trace_id,
-        from_ref = %from_ref,
-        to_ref = %to_ref,
-        "message_received"
+    state.logger.log(
+        LogLevel::Info,
+        EventType::Network,
+        "message_received",
+        Some(&trace_ctx),
+        Some(&from_ref),
+        json!({
+            "message_id": message_id,
+            "trace_id": trace_id,
+            "from_ref": from_ref,
+            "to_ref": to_ref,
+        }),
+        None,
     );
 
     if !within_replay_window(message_timestamp, now, state.replay_window_seconds) {
@@ -509,12 +586,19 @@ async fn send_message(
             .metrics
             .messages_failed
             .fetch_add(1, Ordering::Relaxed);
-        warn!(
-            message_id = %message_id,
-            trace_id = %trace_id,
-            from_ref = %from_ref,
-            to_ref = %to_ref,
-            "message_replay_rejected"
+        state.logger.log(
+            LogLevel::Warn,
+            EventType::Security,
+            "message_replay_rejected",
+            Some(&trace_ctx),
+            Some(&from_ref),
+            json!({
+                "message_id": message_id,
+                "trace_id": trace_id,
+                "from_ref": from_ref,
+                "to_ref": to_ref,
+            }),
+            None,
         );
         return replay_rejected();
     }
@@ -530,12 +614,19 @@ async fn send_message(
                 .metrics
                 .messages_failed
                 .fetch_add(1, Ordering::Relaxed);
-            warn!(
-                message_id = %message_id,
-                trace_id = %trace_id,
-                from_ref = %from_ref,
-                to_ref = %to_ref,
-                "message_duplicate_rejected"
+            state.logger.log(
+                LogLevel::Warn,
+                EventType::Security,
+                "message_duplicate_rejected",
+                Some(&trace_ctx),
+                Some(&from_ref),
+                json!({
+                    "message_id": message_id,
+                    "trace_id": trace_id,
+                    "from_ref": from_ref,
+                    "to_ref": to_ref,
+                }),
+                None,
             );
             return duplicate_message();
         }
@@ -558,12 +649,19 @@ async fn send_message(
                 .metrics
                 .messages_failed
                 .fetch_add(1, Ordering::Relaxed);
-            warn!(
-                message_id = %message_id,
-                trace_id = %trace_id,
-                from_ref = %from_ref,
-                to_ref = %to_ref,
-                "message_source_not_registered"
+            state.logger.log(
+                LogLevel::Warn,
+                EventType::Security,
+                "message_source_not_registered",
+                Some(&trace_ctx),
+                Some(&from_ref),
+                json!({
+                    "message_id": message_id,
+                    "trace_id": trace_id,
+                    "from_ref": from_ref,
+                    "to_ref": to_ref,
+                }),
+                None,
             );
             return identity_mismatch();
         }
@@ -602,12 +700,19 @@ async fn send_message(
             .metrics
             .messages_failed
             .fetch_add(1, Ordering::Relaxed);
-        warn!(
-            message_id = %message_id,
-            trace_id = %trace_id,
-            from_ref = %from_ref,
-            to_ref = %to_ref,
-            "message_identity_mismatch"
+        state.logger.log(
+            LogLevel::Warn,
+            EventType::Security,
+            "message_identity_mismatch",
+            Some(&trace_ctx),
+            Some(&from_ref),
+            json!({
+                "message_id": message_id,
+                "trace_id": trace_id,
+                "from_ref": from_ref,
+                "to_ref": to_ref,
+            }),
+            None,
         );
         return identity_mismatch();
     }
@@ -619,12 +724,19 @@ async fn send_message(
                 .metrics
                 .messages_failed
                 .fetch_add(1, Ordering::Relaxed);
-            warn!(
-                message_id = %message_id,
-                trace_id = %trace_id,
-                from_ref = %from_ref,
-                to_ref = %to_ref,
-                "message_destination_not_found"
+            state.logger.log(
+                LogLevel::Warn,
+                EventType::Network,
+                "message_destination_not_found",
+                Some(&trace_ctx),
+                Some(&from_ref),
+                json!({
+                    "message_id": message_id,
+                    "trace_id": trace_id,
+                    "from_ref": from_ref,
+                    "to_ref": to_ref,
+                }),
+                None,
             );
             return agent_not_found();
         }
@@ -669,13 +781,20 @@ async fn send_message(
             &state.sqlite_path,
         ) {
             Ok(Some(response)) => {
-                info!(
-                    message_id = %message_id,
-                    trace_id = %trace_id,
-                    from_ref = %from_ref,
-                    to_ref = %to_ref,
-                    tool_id = ?execution_ctx.tool_id,
-                    "message_executed_locally"
+                state.logger.log(
+                    LogLevel::Info,
+                    EventType::ToolCall,
+                    "message_executed_locally",
+                    Some(&trace_ctx),
+                    Some(&from_ref),
+                    json!({
+                        "message_id": message_id,
+                        "trace_id": trace_id,
+                        "from_ref": from_ref,
+                        "to_ref": to_ref,
+                        "tool_id": execution_ctx.tool_id.clone(),
+                    }),
+                    None,
                 );
                 return ok_json(StatusCode::OK, response);
             }
@@ -685,13 +804,25 @@ async fn send_message(
                     .metrics
                     .messages_failed
                     .fetch_add(1, Ordering::Relaxed);
-                warn!(
-                    message_id = %message_id,
-                    trace_id = %trace_id,
-                    from_ref = %from_ref,
-                    to_ref = %to_ref,
-                    error = %error,
-                    "message_local_execution_failed"
+                state.logger.log(
+                    LogLevel::Warn,
+                    EventType::Error,
+                    "message_local_execution_failed",
+                    Some(&trace_ctx),
+                    Some(&from_ref),
+                    json!({
+                        "message_id": message_id,
+                        "trace_id": trace_id,
+                        "from_ref": from_ref,
+                        "to_ref": to_ref,
+                        "error": {
+                            "type": "KernelError",
+                            "code": error.code.as_str(),
+                            "message": error.message.clone(),
+                            "retryable": error.retryable,
+                        }
+                    }),
+                    None,
                 );
                 return kernel_error_response(error);
             }
@@ -703,6 +834,14 @@ async fn send_message(
         deliver_url: destination.deliver_url,
     };
 
+    let forward_trace = trace_ctx.child();
+    request.message.trace_id = forward_trace.trace_id.clone();
+    request.message.trace = Some(TraceMetadata {
+        trace_id: forward_trace.trace_id.clone(),
+        span_id: forward_trace.span_id.clone(),
+        parent_span_id: forward_trace.parent_span_id.clone(),
+    });
+
     let mut router = state.router.write().await;
     match router.forward_message(request.message, &route).await {
         Ok(response) => {
@@ -710,12 +849,19 @@ async fn send_message(
                 .metrics
                 .messages_forwarded
                 .fetch_add(1, Ordering::Relaxed);
-            info!(
-                message_id = %message_id,
-                trace_id = %trace_id,
-                from_ref = %from_ref,
-                to_ref = %to_ref,
-                "message_forwarded"
+            state.logger.log(
+                LogLevel::Info,
+                EventType::Network,
+                "message_forwarded",
+                Some(&forward_trace),
+                Some(&from_ref),
+                json!({
+                    "message_id": message_id,
+                    "trace_id": trace_id,
+                    "from_ref": from_ref,
+                    "to_ref": to_ref,
+                }),
+                None,
             );
             ok_json(StatusCode::OK, response)
         }
@@ -724,12 +870,19 @@ async fn send_message(
                 .metrics
                 .messages_failed
                 .fetch_add(1, Ordering::Relaxed);
-            warn!(
-                message_id = %message_id,
-                trace_id = %trace_id,
-                from_ref = %from_ref,
-                to_ref = %to_ref,
-                "message_delivery_timeout"
+            state.logger.log(
+                LogLevel::Warn,
+                EventType::Network,
+                "message_delivery_timeout",
+                Some(&forward_trace),
+                Some(&from_ref),
+                json!({
+                    "message_id": message_id,
+                    "trace_id": trace_id,
+                    "from_ref": from_ref,
+                    "to_ref": to_ref,
+                }),
+                None,
             );
             delivery_timeout()
         }
@@ -738,13 +891,20 @@ async fn send_message(
                 .metrics
                 .messages_failed
                 .fetch_add(1, Ordering::Relaxed);
-            warn!(
-                message_id = %message_id,
-                trace_id = %trace_id,
-                from_ref = %from_ref,
-                to_ref = %to_ref,
-                status = ?status,
-                "message_destination_unreachable"
+            state.logger.log(
+                LogLevel::Warn,
+                EventType::Network,
+                "message_destination_unreachable",
+                Some(&forward_trace),
+                Some(&from_ref),
+                json!({
+                    "message_id": message_id,
+                    "trace_id": trace_id,
+                    "from_ref": from_ref,
+                    "to_ref": to_ref,
+                    "status": status,
+                }),
+                None,
             );
             destination_unreachable(status, details)
         }
@@ -797,11 +957,26 @@ async fn ack_message(
     }
 
     let ack_ctx = build_ack_execution_context(&request);
-    info!(
-        trace_id = %ack_ctx.trace_id,
-        from_ref = %ack_ctx.agent_ref,
-        tool_id = ?ack_ctx.tool_id,
-        "ack_execution_context_built"
+    let ack_trace = TraceContext {
+        trace_id: ack_ctx.trace_id.clone(),
+        span_id: ack_ctx
+            .span_id
+            .clone()
+            .unwrap_or_else(|| TraceContext::from_trace_id(&ack_ctx.trace_id).span_id),
+        parent_span_id: ack_ctx.parent_span_id.clone(),
+    };
+    state.logger.log(
+        LogLevel::Info,
+        EventType::Network,
+        "ack_execution_context_built",
+        Some(&ack_trace),
+        Some(&ack_ctx.agent_ref),
+        json!({
+            "trace_id": ack_ctx.trace_id,
+            "from_ref": ack_ctx.agent_ref,
+            "tool_id": ack_ctx.tool_id,
+        }),
+        None,
     );
 
     let message_id = request.message_id.clone();
@@ -815,7 +990,15 @@ async fn ack_message(
             return destination_unreachable(status, details);
         }
     };
-    info!(message_id = %message_id, from_ref = %from_ref, "ack_recorded");
+    state.logger.log(
+        LogLevel::Info,
+        EventType::Network,
+        "ack_recorded",
+        Some(&ack_trace),
+        Some(&from_ref),
+        json!({"message_id": message_id, "from_ref": from_ref}),
+        None,
+    );
     ok_json(StatusCode::OK, response)
 }
 
@@ -854,9 +1037,147 @@ async fn debug_user_queues(
     )
 }
 
+async fn debug_logging_levels(
+    State(state): State<AppState>,
+    identity: Option<Extension<ClientIdentity>>,
+) -> (StatusCode, Json<Value>) {
+    if let Err(error) = require_client_identity(identity) {
+        return error;
+    }
+
+    let snapshot = state.logger.level_snapshot();
+    ok_json(
+        StatusCode::OK,
+        json!({
+            "version": TFPV1_VERSION,
+            "levels": snapshot,
+        }),
+    )
+}
+
+/// Mutates runtime logging levels for global/agent/trace scopes.
+async fn update_logging_levels(
+    State(state): State<AppState>,
+    identity: Option<Extension<ClientIdentity>>,
+    Json(payload): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    if let Err(error) = require_client_identity(identity) {
+        return error;
+    }
+
+    let request: LoggingLevelUpdateRequest = match serde_json::from_value(payload) {
+        Ok(request) => request,
+        Err(error) => {
+            return invalid_payload(format!("invalid logging level request JSON: {error}"));
+        }
+    };
+
+    let scope = request.scope.to_ascii_lowercase();
+    let clear = request.clear.unwrap_or(false);
+    let message: String;
+
+    match scope.as_str() {
+        "global" => {
+            if clear {
+                state.logger.reset_global_level();
+                message = "global logging level reset to configured default".to_string();
+            } else {
+                let level = match request.level.as_deref() {
+                    Some(level) => match parse_log_level(level) {
+                        Ok(level) => level,
+                        Err(error) => return error,
+                    },
+                    None => {
+                        return invalid_payload("level is required when clear=false".to_string());
+                    }
+                };
+                state.logger.set_global_level(level);
+                message = format!("global logging level updated to {}", level.as_str());
+            }
+        }
+        "agent" => {
+            let agent_id = match request.key.as_deref() {
+                Some(agent_id) if !agent_id.trim().is_empty() => agent_id,
+                _ => return invalid_payload("key is required for scope=agent".to_string()),
+            };
+            if clear {
+                state.logger.clear_agent_level(agent_id);
+                message = format!("agent override cleared for {agent_id}");
+            } else {
+                let level = match request.level.as_deref() {
+                    Some(level) => match parse_log_level(level) {
+                        Ok(level) => level,
+                        Err(error) => return error,
+                    },
+                    None => {
+                        return invalid_payload("level is required when clear=false".to_string());
+                    }
+                };
+                state
+                    .logger
+                    .set_agent_level(agent_id.to_string(), level, request.ttl_ms);
+                message = format!("agent override set for {agent_id} to {}", level.as_str());
+            }
+        }
+        "trace" => {
+            let trace_id = match request.key.as_deref() {
+                Some(trace_id) if !trace_id.trim().is_empty() => trace_id,
+                _ => return invalid_payload("key is required for scope=trace".to_string()),
+            };
+            if clear {
+                state.logger.clear_trace_level(trace_id);
+                message = format!("trace override cleared for {trace_id}");
+            } else {
+                let level = match request.level.as_deref() {
+                    Some(level) => match parse_log_level(level) {
+                        Ok(level) => level,
+                        Err(error) => return error,
+                    },
+                    None => {
+                        return invalid_payload("level is required when clear=false".to_string());
+                    }
+                };
+                state
+                    .logger
+                    .set_trace_level(trace_id.to_string(), level, request.ttl_ms);
+                message = format!("trace override set for {trace_id} to {}", level.as_str());
+            }
+        }
+        _ => {
+            return invalid_payload("scope must be one of global|agent|trace".to_string());
+        }
+    }
+
+    let response = LoggingLevelUpdateResponse {
+        ok: true,
+        message,
+        levels: serde_json::to_value(state.logger.level_snapshot()).unwrap_or_else(|_| json!({})),
+    };
+    ok_json(
+        StatusCode::OK,
+        serde_json::to_value(response).unwrap_or_else(|_| json!({"ok": false})),
+    )
+}
+
+/// Parses a log level token from debug API payload.
+fn parse_log_level(input: &str) -> Result<LogLevel, (StatusCode, Json<Value>)> {
+    let lowered = input.trim().to_ascii_lowercase();
+    match lowered.as_str() {
+        "trace" | "debug" | "info" | "warn" | "error" | "fatal" => {
+            Ok(LogLevel::parse(lowered.as_str()))
+        }
+        _ => Err(invalid_payload(
+            "level must be one of trace|debug|info|warn|error|fatal".to_string(),
+        )),
+    }
+}
+
 fn build_send_execution_context(request: &SendRequest) -> ExecutionContext {
+    let trace = request.message.trace.as_ref();
     ExecutionContext {
         trace_id: request.message.trace_id.clone(),
+        span_id: trace.map(|trace| trace.span_id.clone()),
+        parent_span_id: trace.and_then(|trace| trace.parent_span_id.clone()),
         kingdom_id: request.kingdom_id.clone(),
         agent_ref: request.message.from_ref.clone(),
         tool_id: extract_tool_id_from_meta(&request.message.meta),
@@ -881,10 +1202,41 @@ fn build_ack_execution_context(request: &AckRequest) -> ExecutionContext {
 
     ExecutionContext {
         trace_id,
+        span_id: request
+            .result
+            .as_ref()
+            .and_then(|value| value.get("span_id"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        parent_span_id: request
+            .result
+            .as_ref()
+            .and_then(|value| value.get("parent_span_id"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
         kingdom_id: "unknown".to_string(),
         agent_ref: request.from_ref.clone(),
         tool_id,
     }
+}
+
+fn ensure_message_trace(message: &mut turingflow::tfpv1::types::Envelope) -> TraceContext {
+    let normalized = match &message.trace {
+        Some(trace) => TraceContext {
+            trace_id: trace.trace_id.clone(),
+            span_id: trace.span_id.clone(),
+            parent_span_id: trace.parent_span_id.clone(),
+        },
+        None => TraceContext::from_trace_id(message.trace_id.clone()),
+    };
+
+    message.trace = Some(TraceMetadata {
+        trace_id: normalized.trace_id.clone(),
+        span_id: normalized.span_id.clone(),
+        parent_span_id: normalized.parent_span_id.clone(),
+    });
+    message.trace_id = normalized.trace_id.clone();
+    normalized
 }
 
 fn extract_tool_id_from_meta(meta: &Option<Meta>) -> Option<String> {

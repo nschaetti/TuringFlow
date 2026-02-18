@@ -8,6 +8,10 @@
 pub struct ExecutionContext {
     /// Trace identifier used for audit correlation.
     pub trace_id: String,
+    /// Current span identifier.
+    pub span_id: Option<String>,
+    /// Parent span identifier when known.
+    pub parent_span_id: Option<String>,
     /// Isolation domain identifier.
     pub kingdom_id: String,
     /// Calling agent reference (`name@host` or `id:...`).

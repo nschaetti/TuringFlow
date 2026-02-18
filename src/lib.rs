@@ -56,6 +56,8 @@
 
 /// Kernel policy engine, syscall surface, and auditing.
 pub mod kernel;
+/// Observability utilities (structured logging and tracing).
+pub mod observability;
 /// Terminal UI primitives and app state components.
 pub mod pulse;
 /// LLM and tool orchestration helpers.

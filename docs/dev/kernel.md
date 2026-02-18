@@ -4,7 +4,7 @@ The kernel layer provides controlled host access for agent operations.
 
 ## Core components
 
-- `ExecutionContext`: trace/kingdom/agent/tool identity context.
+- `ExecutionContext`: trace/span/kingdom/agent/tool identity context.
 - `PolicyEngine`: evaluates `allow/deny` for syscall + resource.
 - `Kernel`: façade calling policy then provider.
 - Providers:

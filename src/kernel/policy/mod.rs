@@ -300,6 +300,8 @@ principals: []
         let engine = PolicyEngine::new(config);
         let ctx = ExecutionContext {
             trace_id: "trc_1".to_string(),
+            span_id: None,
+            parent_span_id: None,
             kingdom_id: "kingdom-main".to_string(),
             agent_ref: "planner@node-a.local".to_string(),
             tool_id: None,
@@ -335,6 +337,8 @@ principals:
 
         let ctx = ExecutionContext {
             trace_id: "trc_2".to_string(),
+            span_id: None,
+            parent_span_id: None,
             kingdom_id: "kingdom-main".to_string(),
             agent_ref: "planner@node-a.local".to_string(),
             tool_id: Some("reader".to_string()),
@@ -367,6 +371,8 @@ principals:
         let engine = PolicyEngine::new(config);
         let ctx = ExecutionContext {
             trace_id: "trc_3".to_string(),
+            span_id: None,
+            parent_span_id: None,
             kingdom_id: "kingdom-main".to_string(),
             agent_ref: "planner@node-a.local".to_string(),
             tool_id: None,
@@ -411,6 +417,8 @@ principals:
         let engine = PolicyEngine::new(config);
         let ctx = ExecutionContext {
             trace_id: "trc_4".to_string(),
+            span_id: None,
+            parent_span_id: None,
             kingdom_id: "kingdom-main".to_string(),
             agent_ref: "planner@node-a.local".to_string(),
             tool_id: None,

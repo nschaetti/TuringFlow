@@ -8,6 +8,8 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+use crate::observability::logging::{LogLevel, RotationConfig, SamplingConfig};
+
 /// Main daemon configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DaemonConfig {
@@ -179,6 +181,18 @@ pub struct LoggingConfig {
     pub format: String,
     /// Log level name.
     pub level: String,
+    /// Optional log file path for NDJSON output.
+    #[serde(default = "default_log_file_path")]
+    pub file_path: Option<String>,
+    /// Async logging queue capacity.
+    #[serde(default = "default_log_queue_capacity")]
+    pub queue_capacity: usize,
+    /// Sampling policy for non-error levels.
+    #[serde(default)]
+    pub sampling: SamplingConfig,
+    /// Rotation/compression settings.
+    #[serde(default)]
+    pub rotation: RotationConfig,
 }
 
 impl LoggingConfig {
@@ -188,24 +202,47 @@ impl LoggingConfig {
             _ => return Err("logging.format must be either 'json' or 'plain'".into()),
         }
         match self.level.as_str() {
-            "trace" | "debug" | "info" | "warn" | "error" => {}
+            "trace" | "debug" | "info" | "warn" | "error" | "fatal" => {}
             _ => {
-                return Err("logging.level must be one of trace|debug|info|warn|error".into());
+                return Err(
+                    "logging.level must be one of trace|debug|info|warn|error|fatal".into(),
+                );
             }
+        }
+        if self.queue_capacity == 0 {
+            return Err("logging.queue_capacity must be > 0".into());
+        }
+        validate_sampling("logging.sampling.info_rate", self.sampling.info_rate)?;
+        validate_sampling("logging.sampling.debug_rate", self.sampling.debug_rate)?;
+        validate_sampling("logging.sampling.trace_rate", self.sampling.trace_rate)?;
+        if self.rotation.max_bytes == 0 {
+            return Err("logging.rotation.max_bytes must be > 0".into());
+        }
+        if self.rotation.max_files == 0 {
+            return Err("logging.rotation.max_files must be > 0".into());
         }
         Ok(())
     }
 
-    /// Converts configured level name to `tracing::Level`.
-    pub fn level(&self) -> tracing::Level {
-        match self.level.as_str() {
-            "trace" => tracing::Level::TRACE,
-            "debug" => tracing::Level::DEBUG,
-            "warn" => tracing::Level::WARN,
-            "error" => tracing::Level::ERROR,
-            _ => tracing::Level::INFO,
-        }
+    /// Converts configured level name to logging level.
+    pub fn level(&self) -> LogLevel {
+        LogLevel::parse(&self.level)
     }
+}
+
+fn default_log_file_path() -> Option<String> {
+    Some("logs/turingflowd.log".to_string())
+}
+
+fn default_log_queue_capacity() -> usize {
+    4096
+}
+
+fn validate_sampling(name: &str, value: f64) -> Result<(), Box<dyn Error>> {
+    if !(0.0..=1.0).contains(&value) {
+        return Err(format!("{name} must be between 0.0 and 1.0").into());
+    }
+    Ok(())
 }
 
 /// Kingdom allowlist and quotas configuration.

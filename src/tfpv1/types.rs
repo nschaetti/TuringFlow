@@ -229,6 +229,8 @@ pub struct Envelope {
     pub version: String,
     pub message_id: String,
     pub trace_id: String,
+    #[serde(default)]
+    pub trace: Option<TraceMetadata>,
     pub timestamp: String,
     pub from_ref: String,
     pub to_ref: String,
@@ -246,6 +248,15 @@ impl Envelope {
         validate_version(&self.version)?;
         validate_non_empty("message_id", &self.message_id)?;
         validate_non_empty("trace_id", &self.trace_id)?;
+        if let Some(trace) = &self.trace {
+            trace.validate()?;
+            if trace.trace_id != self.trace_id {
+                return Err(ValidationError::new(
+                    "trace.trace_id",
+                    "must match envelope trace_id",
+                ));
+            }
+        }
         validate_rfc3339("timestamp", &self.timestamp)?;
         AgentRef::parse(&self.from_ref)
             .map_err(|_| ValidationError::new("from_ref", "invalid agent_ref"))?;
@@ -263,6 +274,25 @@ impl Envelope {
             meta.validate()?;
         }
 
+        Ok(())
+    }
+}
+
+/// Distributed tracing metadata attached to one envelope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceMetadata {
+    pub trace_id: String,
+    pub span_id: String,
+    pub parent_span_id: Option<String>,
+}
+
+impl TraceMetadata {
+    fn validate(&self) -> Result<(), ValidationError> {
+        validate_non_empty("trace.trace_id", &self.trace_id)?;
+        validate_non_empty("trace.span_id", &self.span_id)?;
+        if let Some(parent_span_id) = &self.parent_span_id {
+            validate_non_empty("trace.parent_span_id", parent_span_id)?;
+        }
         Ok(())
     }
 }
@@ -434,6 +464,7 @@ mod tests {
             version: "TFPv1".to_string(),
             message_id: "msg_01".to_string(),
             trace_id: "trc_01".to_string(),
+            trace: None,
             timestamp: "2026-02-15T12:34:56Z".to_string(),
             from_ref: "planner@node-a.local".to_string(),
             to_ref: "executor@node-b.local".to_string(),
@@ -460,6 +491,7 @@ mod tests {
             version: "TFPv1".to_string(),
             message_id: "msg_01".to_string(),
             trace_id: "trc_01".to_string(),
+            trace: None,
             timestamp: "not-a-timestamp".to_string(),
             from_ref: "planner@node-a.local".to_string(),
             to_ref: "executor@node-b.local".to_string(),

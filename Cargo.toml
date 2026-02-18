@@ -24,6 +24,8 @@ x509-parser = "0.16"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "json"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
+chromadb = { version = "2.3.0", default-features = false, features = ["rustls-tls"] }
+flate2 = "1.1"
 
 [dev-dependencies]
 rcgen = "0.13"

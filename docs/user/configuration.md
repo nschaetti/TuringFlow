@@ -15,7 +15,20 @@ Key sections:
 - `routing`: retry delays
 - `storage`: SQLite backend/path
 - `limits`: max payload size and max TTL
-- `logging`: format and level
+- `logging`: format, level, file output, queue, sampling
+
+Logging fields:
+
+- `logging.format`: `json` or `plain`
+- `logging.level`: `trace|debug|info|warn|error|fatal`
+- `logging.file_path`: NDJSON output file path (optional)
+- `logging.queue_capacity`: async logger queue size
+- `logging.rotation.max_bytes`: rotate log file after this size
+- `logging.rotation.max_files`: number of rotated segments to keep
+- `logging.rotation.compress`: gzip rotated segments
+- `logging.sampling.info_rate`: 0.0..1.0
+- `logging.sampling.debug_rate`: 0.0..1.0
+- `logging.sampling.trace_rate`: 0.0..1.0
 
 Validation is strict at boot. Invalid or missing values fail startup.
 

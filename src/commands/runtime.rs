@@ -195,6 +195,8 @@ principals:
     fn context(&self, tool_id: Option<&str>) -> ExecutionContext {
         ExecutionContext {
             trace_id: format!("cli_{}", tool_id.unwrap_or("runtime")),
+            span_id: None,
+            parent_span_id: None,
             kingdom_id: "kingdom-local".to_string(),
             agent_ref: self.agent_ref.clone(),
             tool_id: tool_id.map(ToString::to_string),

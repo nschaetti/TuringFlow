@@ -6,6 +6,7 @@
 - `src/tfpv1/*`: protocol types, registry, router, dedupe, config loading.
 - `src/tfpv1/storage/*`: SQLite initialization and persistence modules.
 - `src/kernel/*`: policy engine, syscall kernel, providers, audit sink.
+- `src/observability/*`: structured logging, tracing context, runtime level controls.
 - `src/commands/*`: CLI command handlers and tooling runtime wrappers.
 
 ## Transport planes

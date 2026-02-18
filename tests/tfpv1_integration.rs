@@ -257,6 +257,7 @@ fn build_message(message_id: &str, trace_id: &str, ttl_ms: u64) -> Envelope {
         version: TFPV1_VERSION.to_string(),
         message_id: message_id.to_string(),
         trace_id: trace_id.to_string(),
+        trace: None,
         timestamp: OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .expect("rfc3339 timestamp"),

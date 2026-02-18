@@ -30,3 +30,13 @@ limits:
 logging:
   format: json
   level: info
+  file_path: logs/turingflowd.log
+  queue_capacity: 4096
+  rotation:
+    max_bytes: 52428800
+    max_files: 10
+    compress: true
+  sampling:
+    info_rate: 1.0
+    debug_rate: 0.2
+    trace_rate: 0.05
