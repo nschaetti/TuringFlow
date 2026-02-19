@@ -16,3 +16,7 @@ pub mod image;
 pub mod inbox;
 /// Shared runtime wiring for command handlers.
 pub mod runtime;
+/// Agentic multimodal end-to-end demo.
+pub mod test_agent2;
+/// OpenAI-compatible variant of agentic multimodal demo.
+pub mod test_agent2_openai;

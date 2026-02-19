@@ -3,7 +3,7 @@ from langchain_fireworks import FireworksEmbeddings
 
 
 # 1. Charger le texte depuis un fichier
-text_path = Path("../examples/example.txt")
+text_path = Path("../agent_tests/example.txt")
 text = text_path.read_text(encoding="utf-8")
 
 # 2. Initialiser le modèle d'embedding Fireworks

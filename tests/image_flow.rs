@@ -7,7 +7,7 @@ use turingflow::rchain::tools::encode_image_base64_from_bytes;
 
 #[test]
 fn image_description_response() -> Result<(), Box<dyn Error>> {
-    let image_b64 = encode_image_base64_from_bytes(include_bytes!("../examples/example.png"))?;
+    let image_b64 = encode_image_base64_from_bytes(include_bytes!("../agent_tests/example.png"))?;
     let llm = ChatFireworks::new("accounts/fireworks/models/qwen3-vl-235b-a22b-instruct", 0.2)?;
 
     let message = HumanMessage::from_parts(vec![

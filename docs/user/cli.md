@@ -1,6 +1,6 @@
 # CLI Usage
 
-`turingflow` currently exposes six commands.
+`turingflow` currently exposes eight commands.
 
 ## Help
 
@@ -16,7 +16,7 @@ Example:
 
 ```bash
 cargo run --bin turingflow -- image \
-  --image examples/example.png \
+  --image agent_tests/example.png \
   --prompt "Describe this image" \
   --config config/test.yaml \
   --format json
@@ -34,7 +34,7 @@ Generate an embedding vector from a text file.
 
 ```bash
 cargo run --bin turingflow -- embeddings \
-  --text examples/example.txt \
+  --text agent_tests/example.txt \
   --model nomic-ai/nomic-embed-text-v1.5
 ```
 
@@ -80,6 +80,47 @@ Show user-plane queues directly from SQLite for end-to-end debugging.
 
 ```bash
 cargo run --bin turingflow -- debug-user --limit 50 --include-acked --include-delivered
+```
+
+## `test_agent2`
+
+Runs the multimodal agentic demo (tool loop + image inspection) equivalent to
+`python/example_langchain_agent2_fireworks.py`.
+
+```bash
+FIREWORKS_API_KEY=... cargo run --bin turingflow -- test_agent2
+```
+
+Optional overrides:
+
+```bash
+--model accounts/fireworks/models/minimax-m2p1 \
+--vision-model accounts/fireworks/models/kimi-k2p5 \
+--images-dir agent_tests \
+--report-path report.txt \
+--recursion-limit 20
+```
+
+## `test_agent2_openai`
+
+Runs the same multimodal agentic demo through an OpenAI-compatible chat endpoint.
+
+Required environment:
+
+```bash
+export OPENAI_API_KEY=...
+```
+
+Optional endpoint override (for compatible providers):
+
+```bash
+export OPENAI_BASE_URL=https://your-provider.example/v1/chat/completions
+```
+
+Run:
+
+```bash
+cargo run --bin turingflow -- test_agent2_openai
 ```
 
 ## Security note

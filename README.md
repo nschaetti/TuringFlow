@@ -109,6 +109,18 @@ cargo run --bin turingflow -- inbox --limit 20
 cargo run --bin turingflow -- debug-user --limit 50 --include-acked --include-delivered
 ```
 
+- Run multimodal agentic demo:
+
+```bash
+FIREWORKS_API_KEY=... cargo run --bin turingflow -- test_agent2
+```
+
+- Run multimodal agentic demo on OpenAI-compatible endpoint:
+
+```bash
+OPENAI_API_KEY=... cargo run --bin turingflow -- test_agent2_openai
+```
+
 ## Configuration files
 
 - `config/turingflowd.yaml`: daemon socket, TLS, storage, limits, logging

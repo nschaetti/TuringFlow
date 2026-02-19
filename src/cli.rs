@@ -76,4 +76,46 @@ pub enum Commands {
         #[arg(long = "include-delivered", default_value_t = true)]
         include_delivered: bool,
     },
+    /// Runs the agentic multimodal demo equivalent to python agent2.
+    #[command(name = "test_agent2")]
+    TestAgent2 {
+        #[arg(
+            long = "model",
+            default_value = "accounts/fireworks/models/minimax-m2p1"
+        )]
+        model: String,
+        #[arg(
+            long = "vision-model",
+            default_value = "accounts/fireworks/models/kimi-k2p5"
+        )]
+        vision_model: String,
+        #[arg(long = "temperature", default_value_t = 0.0)]
+        temperature: f64,
+        #[arg(long = "vision-temperature", default_value_t = 0.2)]
+        vision_temperature: f64,
+        #[arg(long = "images-dir", default_value = "agent_tests")]
+        images_dir: String,
+        #[arg(long = "report-path", default_value = "report.txt")]
+        report_path: String,
+        #[arg(long = "recursion-limit", default_value_t = 20)]
+        recursion_limit: usize,
+    },
+    /// Runs the same agentic multimodal demo via OpenAI-compatible endpoint.
+    #[command(name = "test_agent2_openai")]
+    TestAgent2Openai {
+        #[arg(long = "model", default_value = "gpt-4o-mini")]
+        model: String,
+        #[arg(long = "vision-model", default_value = "gpt-4o-mini")]
+        vision_model: String,
+        #[arg(long = "temperature", default_value_t = 0.0)]
+        temperature: f64,
+        #[arg(long = "vision-temperature", default_value_t = 0.2)]
+        vision_temperature: f64,
+        #[arg(long = "images-dir", default_value = "agent_tests")]
+        images_dir: String,
+        #[arg(long = "report-path", default_value = "report.txt")]
+        report_path: String,
+        #[arg(long = "recursion-limit", default_value_t = 20)]
+        recursion_limit: usize,
+    },
 }

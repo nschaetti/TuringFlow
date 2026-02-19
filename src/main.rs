@@ -58,6 +58,46 @@ fn main() -> Result<(), Box<dyn Error>> {
                 include_delivered,
             )?;
         }
+        Commands::TestAgent2 {
+            model,
+            vision_model,
+            temperature,
+            vision_temperature,
+            images_dir,
+            report_path,
+            recursion_limit,
+        } => {
+            commands::test_agent2::run_test_agent2(
+                &runtime,
+                model,
+                vision_model,
+                temperature,
+                vision_temperature,
+                images_dir,
+                report_path,
+                recursion_limit,
+            )?;
+        }
+        Commands::TestAgent2Openai {
+            model,
+            vision_model,
+            temperature,
+            vision_temperature,
+            images_dir,
+            report_path,
+            recursion_limit,
+        } => {
+            commands::test_agent2_openai::run_test_agent2_openai(
+                &runtime,
+                model,
+                vision_model,
+                temperature,
+                vision_temperature,
+                images_dir,
+                report_path,
+                recursion_limit,
+            )?;
+        }
     }
 
     Ok(())

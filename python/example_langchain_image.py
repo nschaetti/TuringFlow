@@ -15,7 +15,7 @@ def encode_image(path: str) -> str:
 
 
 # Encode the image
-image_b64 = encode_image("../examples/example.png")
+image_b64 = encode_image("../agent_tests/example.png")
 
 # Fireworks vision model
 llm = ChatFireworks(

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use turingflow::kernel::context::ExecutionContext;
 use turingflow::kernel::policy::{PolicyConfig, PolicyEngine};
-use turingflow::kernel::syscalls::fs::{FsReadReq, FsWriteReq, HostFsProvider};
+use turingflow::kernel::syscalls::fs::{FsListReq, FsReadReq, FsWriteReq, HostFsProvider};
 use turingflow::kernel::syscalls::user::{
     SqliteUserCommsProvider, UserInboxReq, UserIngestReq, UserOutboundMessage,
 };
@@ -99,6 +99,26 @@ principals:
             db_path,
             agent_ref,
         })
+    }
+
+    /// Reads file bytes through kernel `fs.read`.
+    pub fn list_directory(
+        &self,
+        path: impl AsRef<Path>,
+        tool_id: Option<&str>,
+    ) -> Result<Vec<String>, Box<dyn Error>> {
+        let normalized = self.normalize_path(path.as_ref())?;
+        let response = self.kernel.fs_list(
+            &self.context(tool_id),
+            FsListReq {
+                path: normalized.display().to_string(),
+            },
+        )?;
+        Ok(response
+            .entries
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect())
     }
 
     /// Reads file bytes through kernel `fs.read`.

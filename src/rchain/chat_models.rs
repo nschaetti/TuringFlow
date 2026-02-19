@@ -24,11 +24,41 @@ impl ChatFireworks {
     pub fn new(model: impl Into<String>, temperature: f64) -> Result<Self, Box<dyn Error>> {
         let api_key = env::var("FIREWORKS_API_KEY")
             .map_err(|_| "FIREWORKS_API_KEY is not set in the environment")?;
+        Self::new_with_api_key_and_base_url(
+            model,
+            temperature,
+            api_key,
+            "https://api.fireworks.ai/inference/v1/chat/completions",
+        )
+    }
+
+    /// Creates a client for OpenAI-compatible chat completions endpoint.
+    ///
+    /// Uses `OPENAI_API_KEY` and optional `OPENAI_BASE_URL`
+    /// (`https://api.openai.com/v1/chat/completions` by default).
+    pub fn new_openai_compatible(
+        model: impl Into<String>,
+        temperature: f64,
+    ) -> Result<Self, Box<dyn Error>> {
+        let api_key = env::var("OPENAI_API_KEY")
+            .map_err(|_| "OPENAI_API_KEY is not set in the environment")?;
+        let base_url = env::var("OPENAI_BASE_URL")
+            .unwrap_or_else(|_| "https://api.openai.com/v1/chat/completions".to_string());
+        Self::new_with_api_key_and_base_url(model, temperature, api_key, base_url)
+    }
+
+    /// Creates a client with explicit API key and chat-completions endpoint URL.
+    pub fn new_with_api_key_and_base_url(
+        model: impl Into<String>,
+        temperature: f64,
+        api_key: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
             model: model.into(),
             temperature,
-            api_key,
-            base_url: "https://api.fireworks.ai/inference/v1/chat/completions".to_string(),
+            api_key: api_key.into(),
+            base_url: base_url.into(),
             client: Client::new(),
             tools: None,
         })
@@ -77,12 +107,12 @@ impl ChatFireworks {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().unwrap_or_default();
-            return Err(format!("Fireworks API error {status}: {body}").into());
+            return Err(format!("Chat completions API error {status}: {body}").into());
         }
 
         let body: serde_json::Value = response.json()?;
         let message = &body["choices"][0]["message"];
-        let content = message["content"].as_str().unwrap_or("").to_string();
+        let content = parse_content(message.get("content"));
         let tool_calls = parse_tool_calls(message);
 
         Ok(AIMessage {
@@ -95,6 +125,8 @@ impl ChatFireworks {
 /// Supported role values in chat requests.
 #[derive(Debug, Clone)]
 pub enum MessageRole {
+    /// System role.
+    System,
     /// Human/user role.
     User,
     /// Assistant role.
@@ -113,6 +145,16 @@ pub struct ChatMessage {
 }
 
 impl ChatMessage {
+    /// Builds a plain-text system message.
+    pub fn system_text(content: impl Into<String>) -> Self {
+        Self {
+            role: MessageRole::System,
+            content: Value::String(content.into()),
+            tool_call_id: None,
+            tool_calls: None,
+        }
+    }
+
     /// Builds a user message from [`HumanMessage`].
     pub fn user(message: HumanMessage) -> Self {
         Self {
@@ -179,6 +221,7 @@ impl ChatMessage {
             "role".to_string(),
             Value::String(
                 match self.role {
+                    MessageRole::System => "system",
                     MessageRole::User => "user",
                     MessageRole::Assistant => "assistant",
                     MessageRole::Tool => "tool",
@@ -200,6 +243,33 @@ impl ChatMessage {
             );
         }
         Value::Object(map)
+    }
+}
+
+fn parse_content(content: Option<&Value>) -> String {
+    let Some(content) = content else {
+        return String::new();
+    };
+
+    match content {
+        Value::Null => String::new(),
+        Value::String(text) => text.clone(),
+        Value::Array(parts) => {
+            let mut chunks = Vec::new();
+            for part in parts {
+                if let Some(text) = part.get("text").and_then(Value::as_str) {
+                    if !text.is_empty() {
+                        chunks.push(text.to_string());
+                    }
+                }
+            }
+            if chunks.is_empty() {
+                serde_json::to_string(parts).unwrap_or_default()
+            } else {
+                chunks.join("\n")
+            }
+        }
+        other => serde_json::to_string(other).unwrap_or_default(),
     }
 }
 

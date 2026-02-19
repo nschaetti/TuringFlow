@@ -3,6 +3,8 @@
 //! The module contains typed wrappers for chat models, embeddings, tool calls,
 //! and multimodal helpers used by CLI commands and experiments.
 
+/// Agent factory and tool loop helpers.
+pub mod agents;
 /// Generic AI response traits and structures.
 pub mod ai;
 /// Chat model client abstractions.
